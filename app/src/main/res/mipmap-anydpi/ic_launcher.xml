@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 背景：墨绿渐变 + 中心高光 -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:startColor="#2E5E4D" android:endColor="#163028" android:angle="135" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:gradientRadius="62" android:centerX="54" android:centerY="50" android:startColor="#3C7060" android:endColor="#003C7060" />
+        </aapt:attr>
+    </path>
+    <!-- 「册」字：米白笔画 -->
+    <path android:fillColor="#F4ECD8" android:pathData="M30,30 L78,30 L78,36 L30,36 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M30,72 L78,72 L78,78 L30,78 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M32,36 L38,36 L38,72 L32,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M44,36 L50,36 L50,72 L44,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M56,36 L62,36 L62,72 L56,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M68,36 L74,36 L74,72 L68,72 Z" />
+    <!-- 五条金色弦线，中间最亮 -->
+    <path android:fillColor="#D9A441" android:pathData="M30,40 C44,39 64,39 78,40 L78,42 C64,41 44,41 30,42 Z" />
+    <path android:fillColor="#E8B955" android:pathData="M30,46 C44,45 64,45 78,46 L78,48 C64,47 44,47 30,48 Z" />
+    <path android:fillColor="#F5D08A" android:pathData="M30,52 C44,51 64,51 78,52 L78,54 C64,53 44,53 30,54 Z" />
+    <path android:fillColor="#E8B955" android:pathData="M30,58 C44,57 64,57 78,58 L78,60 C64,59 44,59 30,60 Z" />
+    <path android:fillColor="#D9A441" android:pathData="M30,64 C44,63 64,63 78,64 L78,66 C64,65 44,65 30,66 Z" />
+</vector>

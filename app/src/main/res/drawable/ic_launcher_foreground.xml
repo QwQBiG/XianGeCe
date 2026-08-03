@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 「册」字：米白笔画，严格居中于 54,54 -->
+    <!-- 顶横 -->
+    <path android:fillColor="#F4ECD8" android:pathData="M30,30 L78,30 L78,36 L30,36 Z" />
+    <!-- 底横 -->
+    <path android:fillColor="#F4ECD8" android:pathData="M30,72 L78,72 L78,78 L30,78 Z" />
+    <!-- 四竖 -->
+    <path android:fillColor="#F4ECD8" android:pathData="M32,36 L38,36 L38,72 L32,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M44,36 L50,36 L50,72 L44,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M56,36 L62,36 L62,72 L56,72 Z" />
+    <path android:fillColor="#F4ECD8" android:pathData="M68,36 L74,36 L74,72 L68,72 Z" />
+
+    <!-- 五条金色弦线，中间最亮呈高光，带微弧如琴弦 -->
+    <path android:fillColor="#D9A441" android:pathData="M30,40 C44,39 64,39 78,40 L78,42 C64,41 44,41 30,42 Z" />
+    <path android:fillColor="#E8B955" android:pathData="M30,46 C44,45 64,45 78,46 L78,48 C64,47 44,47 30,48 Z" />
+    <path android:fillColor="#F5D08A" android:pathData="M30,52 C44,51 64,51 78,52 L78,54 C64,53 44,53 30,54 Z" />
+    <path android:fillColor="#E8B955" android:pathData="M30,58 C44,57 64,57 78,58 L78,60 C64,59 44,59 30,60 Z" />
+    <path android:fillColor="#D9A441" android:pathData="M30,64 C44,63 64,63 78,64 L78,66 C64,65 44,65 30,66 Z" />
+
+</vector>

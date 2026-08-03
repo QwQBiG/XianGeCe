@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_name">弦歌册 · 今日</string>
+    <string name="widget_description">查看今天的下一节课程与教室</string>
+    <string name="widget_compact_description">桌面角落快速查看下一节课</string>
+    <string name="widget_agenda_description">查看今天接下来的三节课程</string>
+    <string name="widget_compact_name">弦歌册 · 下一节</string>
+    <string name="widget_agenda_name">弦歌册 · 今日安排</string>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">弦歌册</string>
+    <string name="notification_channel_course">课程提醒</string>
+    <string name="notification_channel_task">事项提醒</string>
+</resources>

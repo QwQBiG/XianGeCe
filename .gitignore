@@ -1,0 +1,23 @@
+*.iml
+.gradle/
+.idea/
+local.properties
+/build/
+/app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.jks
+*.keystore
+keystore.properties
+.toolchains/
+
+# signing keystore
+keys/
+
+# 构建产物与临时文件（不上传）
+/dist/
+/outputs/
+/tmp/
+*.log
+icon-preview.png

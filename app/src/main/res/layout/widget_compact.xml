@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/compact_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="8dp"
+    android:background="@drawable/widget_background">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="下一节" android:textColor="#B18C3E" android:textSize="10sp" />
+    <TextView android:id="@+id/compact_course" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:ellipsize="end" android:maxLines="1" android:textColor="#214E45" android:textSize="14sp" android:textStyle="bold" />
+    <TextView android:id="@+id/compact_time" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:textColor="#63756C" android:textSize="11sp" />
+</LinearLayout>
