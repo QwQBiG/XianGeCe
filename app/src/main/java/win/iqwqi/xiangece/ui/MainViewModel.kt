@@ -55,6 +55,7 @@ import win.iqwqi.xiangece.domain.model.WeekParity
 import win.iqwqi.xiangece.domain.parser.TimetableCandidate
 import win.iqwqi.xiangece.domain.parser.DraftConfirmationFields
 import win.iqwqi.xiangece.domain.parser.DraftConfirmationValidator
+import win.iqwqi.xiangece.domain.parser.PdfTextTimetableParser
 import win.iqwqi.xiangece.domain.semester.CourseConflictDetector
 
 data class DraftEditorState(
@@ -346,7 +347,12 @@ class MainViewModel @Inject constructor(
                     val endWeek = repository.currentSemester()?.weekCount ?: 20
                     val maxPeriods = repository.allPeriods().maxOfOrNull { it.periodIndex } ?: 12
                     val (sourceText, candidates) = when (format) {
-                        "pdf" -> pdfTimetableImporter.parse(file, endWeek, maxPeriods)
+                        "pdf_table" -> pdfTimetableImporter.parse(
+                            file, endWeek, maxPeriods, PdfTextTimetableParser.Layout.TABLE,
+                        )
+                        "pdf_list" -> pdfTimetableImporter.parse(
+                            file, endWeek, maxPeriods, PdfTextTimetableParser.Layout.LIST,
+                        )
                         "html" -> {
                             val rows = tabularTimetableImporter.parseHtml(file, endWeek)
                             file.readText() to rows
@@ -361,7 +367,7 @@ class MainViewModel @Inject constructor(
                         else -> error("未知的课表导入格式")
                     }
                     require(candidates.isNotEmpty()) {
-                        if (format == "pdf") "未从 PDF 中识别到可确认的课程；请选择教务系统导出的原始 PDF、HTML 或 Excel，扫描件请逐项确认"
+                        if (format.startsWith("pdf_")) "未从 PDF 中识别到可确认的课程。请确认选择了对应版式；扫描件没有文字层时可改用 AI 图片转日程。"
                         else "文件中没有识别到可导入的课程表格"
                     }
                     val id = repository.createTextInbox(sourceText.take(100_000), "timetable_$format")
@@ -371,7 +377,8 @@ class MainViewModel @Inject constructor(
                         candidates,
                         endWeek,
                         when (format) {
-                            "pdf" -> "PDF 原始课表"
+                            "pdf_table" -> "PDF 表格课表"
+                            "pdf_list" -> "PDF 列表课表"
                             "html" -> "HTML 课表"
                             else -> "Excel 课表"
                         },
@@ -827,7 +834,13 @@ class MainViewModel @Inject constructor(
 
     fun setDarkMode(darkMode: Boolean) {
         viewModelScope.launch {
-            settingsStore.updateGeneral(darkMode = darkMode)
+            settingsStore.updateGeneral(darkMode = darkMode, followSystemTheme = false)
+        }
+    }
+
+    fun setFollowSystemTheme(follow: Boolean) {
+        viewModelScope.launch {
+            settingsStore.updateGeneral(followSystemTheme = follow)
         }
     }
 
@@ -1292,9 +1305,9 @@ class MainViewModel @Inject constructor(
     }
 
     fun sendTestNotification() {
-        reminderScheduler.sendTestNotification()
-        viewModelScope.launch {
-            messages.emit("测试通知将在 3 秒后发送，请检查系统通知栏")
+        messages.tryEmit("测试通知将在 3 秒后发送，请检查系统通知栏")
+        reminderScheduler.sendTestNotification { result ->
+            messages.tryEmit(result)
         }
     }
 

@@ -163,7 +163,12 @@ fun HabitsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = 20.dp, end = 20.dp, bottom = contentPadding.calculateBottomPadding()),
+                .padding(
+                    start = 20.dp,
+                    top = 20.dp,
+                    end = 20.dp,
+                    bottom = contentPadding.calculateBottomPadding(),
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             BrandHeader(

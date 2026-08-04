@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -124,9 +125,12 @@ fun PaperCard(
     elevation: Dp = 0.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val cardShape = RoundedCornerShape(24.dp)
     Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        // Card's shape controls its surface, while an explicit clip also
+        // prevents child backgrounds/ripples from painting square corners.
+        modifier = modifier.fillMaxWidth().clip(cardShape),
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
         border = CardDefaults.outlinedCardBorder(enabled = true).copy(
             brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),

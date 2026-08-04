@@ -2,6 +2,7 @@ package win.iqwqi.xiangece.ui
 
 import android.Manifest
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
@@ -36,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
@@ -60,6 +63,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -102,9 +106,12 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { it?.let(viewModel::importImage) }
-    val timetablePdfPicker = rememberLauncherForActivityResult(
+    val timetablePdfTablePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
-    ) { it?.let { uri -> viewModel.importTimetableFile(uri, "pdf") } }
+    ) { it?.let { uri -> viewModel.importTimetableFile(uri, "pdf_table") } }
+    val timetablePdfListPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { it?.let { uri -> viewModel.importTimetableFile(uri, "pdf_list") } }
     val timetableHtmlPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { it?.let { uri -> viewModel.importTimetableFile(uri, "html") } }
@@ -120,9 +127,16 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { it?.let(viewModel::restoreBackup) }
+    var sendTestAfterPermission by remember { mutableStateOf(false) }
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) {}
+    ) { granted ->
+        if (sendTestAfterPermission) {
+            sendTestAfterPermission = false
+            if (granted) viewModel.sendTestNotification()
+            else viewModel.messages.tryEmit("通知权限未开启，测试通知无法发送")
+        }
+    }
     var showStartupSplash by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
@@ -133,9 +147,13 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
 
     LaunchedEffect(Unit) {
         viewModel.messages.collectLatest { message ->
-            // 统一用 Snackbar 显示（不再同时弹 Toast，避免重复打扰）
-            // 若有待撤销动作（如删除），附带「撤销」按钮
             val undo = viewModel.pendingUndo.value
+            // 普通提示使用系统 Toast，保证在 ModalBottomSheet、系统弹层之上显示；
+            // 只有需要“撤销”操作时才保留可交互的 Snackbar。
+            if (undo == null) {
+                Toast.makeText(context.applicationContext, message, Toast.LENGTH_SHORT).show()
+                return@collectLatest
+            }
             val result = snackbar.showSnackbar(
                 message = message,
                 actionLabel = undo?.actionLabel,
@@ -242,6 +260,15 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
             viewModel.markNotificationPermissionAsked()
         }
     }
+    val requestTestNotificationRuntime: () -> Unit = {
+        if (Build.VERSION.SDK_INT >= 33) {
+            sendTestAfterPermission = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            viewModel.markNotificationPermissionAsked()
+        } else {
+            viewModel.sendTestNotification()
+        }
+    }
     val openNotificationSettings: () -> Unit = {
         val ctx = appContext
         val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -285,46 +312,60 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
             },
             bottomBar = {
                 if (currentPage == 2 && !courseNavExpanded) {
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(10.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.38f))
+                            .background(MaterialTheme.colorScheme.surface)
                             .clickable { courseNavExpanded = true },
-                        contentAlignment = Alignment.Center,
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.18f)
-                                .height(3.dp)
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.26f)),
-                        )
+                                .fillMaxWidth()
+                                .height(10.dp)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.38f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(0.18f)
+                                    .height(3.dp)
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.26f)),
+                            )
+                        }
+                        Spacer(Modifier.navigationBarsPadding())
                     }
                 } else {
-                    NavigationBar(
-                        modifier = Modifier.height(64.dp),
-                        containerColor = MaterialTheme.colorScheme.surface,
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface),
                     ) {
-                        destinations.forEachIndexed { index, destination ->
-                            NavigationBarItem(
-                                selected = currentPage == index,
-                                onClick = {
-                                    if (currentPage == 2 && index == 2) {
-                                        courseNavExpanded = false
-                                    } else {
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(index)
+                        NavigationBar(
+                            modifier = Modifier.fillMaxWidth(),
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            windowInsets = NavigationBarDefaults.windowInsets,
+                        ) {
+                            destinations.forEachIndexed { index, destination ->
+                                NavigationBarItem(
+                                    selected = currentPage == index,
+                                    onClick = {
+                                        if (currentPage == 2 && index == 2) {
+                                            courseNavExpanded = false
+                                        } else {
+                                            scope.launch {
+                                                pagerState.animateScrollToPage(index)
+                                            }
                                         }
-                                    }
-                                },
-                                icon = { Icon(destination.icon, contentDescription = destination.label) },
-                                label = { Text(destination.label, style = MaterialTheme.typography.labelSmall) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                ),
-                            )
+                                    },
+                                    icon = { Icon(destination.icon, contentDescription = destination.label) },
+                                    label = { Text(destination.label, style = MaterialTheme.typography.labelSmall) },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
@@ -363,8 +404,11 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         contentPadding = padding,
                         onSaveCourse = viewModel::saveCourse,
                         onDeleteMeeting = viewModel::deleteCourseMeeting,
-                        onPickTimetablePdf = {
-                            timetablePdfPicker.launch(arrayOf("application/pdf"))
+                        onPickTimetablePdfTable = {
+                            timetablePdfTablePicker.launch(arrayOf("application/pdf"))
+                        },
+                        onPickTimetablePdfList = {
+                            timetablePdfListPicker.launch(arrayOf("application/pdf"))
                         },
                         onPickTimetableHtml = {
                             timetableHtmlPicker.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain"))
@@ -436,11 +480,13 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         onSendTestNotification = viewModel::sendTestNotification,
                         onSetThemeSeed = viewModel::setThemeSeed,
                         onSetDarkMode = viewModel::setDarkMode,
+                        onSetFollowSystemTheme = viewModel::setFollowSystemTheme,
                         onRegister = viewModel::registerAccount,
                         onLogin = viewModel::loginAccount,
                         onLogout = viewModel::logoutAccount,
                         permissionState = permissionState.value,
                         onRequestNotificationRuntime = requestNotificationRuntime,
+                        onRequestTestNotificationRuntime = requestTestNotificationRuntime,
                         onOpenNotificationSettings = openNotificationSettings,
                         onOpenExactAlarmSettings = openExactAlarmSettings,
                     )

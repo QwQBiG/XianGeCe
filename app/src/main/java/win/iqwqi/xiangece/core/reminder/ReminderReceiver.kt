@@ -23,6 +23,20 @@ class ReminderReceiver : BroadcastReceiver() {
     @Inject lateinit var dao: CampusDao
 
     override fun onReceive(context: Context, intent: Intent) {
+        // 番茄钟开启免打扰时，仅抑制弦歌册自己的课程/任务提醒，
+        // 不修改系统通知权限，也不影响其他应用。
+        val pomodoroPrefs = context.getSharedPreferences("pomodoro_state", Context.MODE_PRIVATE)
+        val suppressUntil = pomodoroPrefs.getLong("suppress_until", 0L)
+        val suppressionActive = pomodoroPrefs.getBoolean("suppress_reminders", false) &&
+            (suppressUntil == 0L || suppressUntil > System.currentTimeMillis())
+        if (suppressionActive) return
+        // 旧版本或异常退出可能留下永久开关；过期后立即清理，避免提醒被静默吞掉。
+        if (pomodoroPrefs.getBoolean("suppress_reminders", false)) {
+            pomodoroPrefs.edit()
+                .putBoolean("suppress_reminders", false)
+                .putLong("suppress_until", 0L)
+                .apply()
+        }
         val reminderId = intent.getLongExtra(EXTRA_ID, -1L)
         if (reminderId > 0) {
             val pendingResult = goAsync()

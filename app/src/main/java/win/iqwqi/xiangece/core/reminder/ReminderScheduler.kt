@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,6 +29,8 @@ object ReminderChannels {
     const val TASK = "task_reminders"
     const val EVENT = "event_reminders"
     const val MISC = "misc"
+    /** 独立测试频道，避免旧版本被用户关闭后测试永远静默。 */
+    const val TEST = "test_notifications_v2"
 }
 
 object ReminderTargets {
@@ -176,7 +182,72 @@ class ReminderScheduler @Inject constructor(
         )
     }
 
-    fun sendTestNotification() {
+    fun sendTestNotification(onResult: (String) -> Unit = {}) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS,
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                onResult("通知权限未开启，请在系统设置中允许弦歌册发送通知")
+                return@postDelayed
+            }
+            val notifications = NotificationManagerCompat.from(context)
+            if (!notifications.areNotificationsEnabled()) {
+                onResult("系统通知总开关已关闭，请先开启弦歌册通知")
+                return@postDelayed
+            }
+            createTestChannel()
+            if (context.getSystemService(NotificationManager::class.java)
+                    ?.getNotificationChannel(ReminderChannels.TEST)?.importance == NotificationManager.IMPORTANCE_NONE
+            ) {
+                onResult("测试通知频道已被系统关闭，请在通知设置中重新开启")
+                return@postDelayed
+            }
+            val openIntent = PendingIntent.getActivity(
+                context,
+                999999,
+                Intent(context, win.iqwqi.xiangece.MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notification = NotificationCompat.Builder(context, ReminderChannels.TEST)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("弦歌册测试")
+                .setContentText("测试通知已发送，请检查系统通知栏")
+                .setContentIntent(openIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+            runCatching {
+                notifications.notify(999999, notification)
+            }.onSuccess {
+                onResult("测试通知已发送，请检查系统通知栏")
+            }.onFailure {
+                onResult("通知发送失败：${it.message ?: "系统拒绝了通知"}")
+            }
+        }, 3000L)
+    }
+
+    private fun createTestChannel() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(
+                ReminderChannels.TEST,
+                "测试通知",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "用于验证弦歌册通知权限与系统通知栏"
+                enableVibration(true)
+                setShowBadge(true)
+            },
+        )
+    }
+
+    private fun sendTestNotificationLegacy() {
         val testId = 999999L
         val intent = Intent(context, ReminderReceiver::class.java)
             .putExtra(ReminderReceiver.EXTRA_TITLE, "弦歌册测试")
@@ -211,6 +282,16 @@ class ReminderScheduler @Inject constructor(
                     ReminderChannels.TASK,
                     context.getString(R.string.notification_channel_task),
                     NotificationManager.IMPORTANCE_DEFAULT,
+                ),
+                NotificationChannel(
+                    ReminderChannels.MISC,
+                    "弦歌册测试通知",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ),
+                NotificationChannel(
+                    ReminderChannels.TEST,
+                    "测试通知",
+                    NotificationManager.IMPORTANCE_HIGH,
                 ),
                 NotificationChannel(
                     ReminderChannels.EVENT,

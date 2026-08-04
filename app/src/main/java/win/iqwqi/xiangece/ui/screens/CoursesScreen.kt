@@ -72,6 +72,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -127,7 +128,8 @@ fun CoursesScreen(
     contentPadding: PaddingValues,
     onSaveCourse: SaveCourse,
     onDeleteMeeting: (CourseMeetingEntity) -> Unit,
-    onPickTimetablePdf: () -> Unit,
+    onPickTimetablePdfTable: () -> Unit,
+    onPickTimetablePdfList: () -> Unit,
     onPickTimetableHtml: () -> Unit,
     onPickTimetableExcel: () -> Unit,
     onImportTimetableCode: (String) -> Unit,
@@ -393,9 +395,13 @@ fun CoursesScreen(
     if (showImportCenter) {
         TimetableImportDialog(
             onDismiss = { showImportCenter = false },
-            onPickPdf = {
+            onPickPdfTable = {
                 showImportCenter = false
-                onPickTimetablePdf()
+                onPickTimetablePdfTable()
+            },
+            onPickPdfList = {
+                showImportCenter = false
+                onPickTimetablePdfList()
             },
             onPickHtml = {
                 showImportCenter = false
@@ -1068,7 +1074,8 @@ private fun CurrentWeekDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun TimetableImportDialog(
     onDismiss: () -> Unit,
-    onPickPdf: () -> Unit,
+    onPickPdfTable: () -> Unit,
+    onPickPdfList: () -> Unit,
     onPickHtml: () -> Unit,
     onPickExcel: () -> Unit,
     onOpenCode: () -> Unit,
@@ -1087,18 +1094,19 @@ private fun TimetableImportDialog(
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                "HTML 与 Excel 通常字段更完整；PDF 会尽量提取课程、楼宇、教室和周次，扫描版或排版复杂的文件需要逐条核对。",
+                "所有结果都会先进入核对页，确认后才写入当前课表。表格版按星期与节次定位；列表版按课程条目、时间与周次定位。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onPickHtml, modifier = Modifier.weight(1f)) { Text("教务 HTML") }
-                OutlinedButton(onClick = onPickPdf, modifier = Modifier.weight(1f)) { Text("PDF") }
+                OutlinedButton(onClick = onPickPdfTable, modifier = Modifier.weight(1f)) { Text("PDF 表格版") }
+                OutlinedButton(onClick = onPickPdfList, modifier = Modifier.weight(1f)) { Text("PDF 列表版") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onPickHtml, modifier = Modifier.weight(1f)) { Text("教务 HTML") }
                 OutlinedButton(onClick = onPickExcel, modifier = Modifier.weight(1f)) { Text("Excel") }
-                OutlinedButton(onClick = onOpenCode, modifier = Modifier.weight(1f)) { Text("课表口令") }
             }
+            OutlinedButton(onClick = onOpenCode, modifier = Modifier.fillMaxWidth()) { Text("课表口令") }
             OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
         }
     }
@@ -1376,12 +1384,15 @@ private fun WeeklyTimetableGrid(
             ?.let { runCatching { BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
     }
 
+    val gridShape = RoundedCornerShape(14.dp)
     Card(
-        modifier = modifier.fillMaxWidth(),
+        // The grid used to round only its top edge, leaving a rectangular
+        // surface behind the empty-state card at the bottom.
+        modifier = modifier.fillMaxWidth().clip(gridShape),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
         ),
-        shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
+        shape = gridShape,
     ) {
         Row(
             modifier = Modifier
@@ -1396,6 +1407,7 @@ private fun WeeklyTimetableGrid(
                 ) {
                     Text(
                         "${weekStartDate.monthValue}月",
+                        modifier = Modifier.padding(start = 4.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                     )

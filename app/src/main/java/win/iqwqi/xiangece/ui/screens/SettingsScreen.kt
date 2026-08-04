@@ -121,11 +121,13 @@ fun SettingsScreen(
     onSendTestNotification: () -> Unit,
     onSetThemeSeed: (String) -> Unit = {},
     onSetDarkMode: (Boolean) -> Unit = {},
+    onSetFollowSystemTheme: (Boolean) -> Unit = {},
     onRegister: (String, String) -> Unit = { _, _ -> },
     onLogin: (String) -> Unit = {},
     onLogout: () -> Unit = {},
     permissionState: PermissionState = PermissionState(),
     onRequestNotificationRuntime: () -> Unit = {},
+    onRequestTestNotificationRuntime: () -> Unit = {},
     onOpenNotificationSettings: () -> Unit = {},
     onOpenExactAlarmSettings: () -> Unit = {},
 ) {
@@ -300,6 +302,7 @@ fun SettingsScreen(
             permissionState = permissionState,
             onSendTestNotification = onSendTestNotification,
             onRequestNotificationRuntime = onRequestNotificationRuntime,
+            onRequestTestNotificationRuntime = onRequestTestNotificationRuntime,
             onOpenNotificationSettings = onOpenNotificationSettings,
             onOpenExactAlarmSettings = onOpenExactAlarmSettings,
             onDismiss = { panel = null },
@@ -308,6 +311,7 @@ fun SettingsScreen(
             state = state,
             onSetThemeSeed = onSetThemeSeed,
             onSetDarkMode = onSetDarkMode,
+            onSetFollowSystemTheme = onSetFollowSystemTheme,
             onDismiss = { panel = null },
         )
         MinePanel.PRIVACY -> PrivacySheet(onDismiss = { panel = null })
@@ -908,6 +912,7 @@ private fun RemindersSheet(
     permissionState: PermissionState,
     onSendTestNotification: () -> Unit,
     onRequestNotificationRuntime: () -> Unit,
+    onRequestTestNotificationRuntime: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onOpenExactAlarmSettings: () -> Unit,
     onDismiss: () -> Unit,
@@ -1023,7 +1028,15 @@ private fun RemindersSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Button(onClick = onSendTestNotification) {
+                        Button(
+                            onClick = {
+                                if (permissionState.notificationsGranted) {
+                                    onSendTestNotification()
+                                } else {
+                                    onRequestTestNotificationRuntime()
+                                }
+                            },
+                        ) {
                             Icon(Icons.Outlined.Notifications, contentDescription = null)
                             Spacer(Modifier.padding(horizontal = 4.dp))
                             Text("发送")
@@ -1129,6 +1142,7 @@ private fun AppearanceSheet(
     state: AppUiState,
     onSetThemeSeed: (String) -> Unit,
     onSetDarkMode: (Boolean) -> Unit,
+    onSetFollowSystemTheme: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val themeSeeds = win.iqwqi.xiangece.ui.theme.themeSeeds
@@ -1158,8 +1172,28 @@ private fun AppearanceSheet(
                     }
                     Switch(
                         checked = state.settings.darkMode,
-                        onCheckedChange = onSetDarkMode,
+                        onCheckedChange = {
+                            onSetFollowSystemTheme(false)
+                            onSetDarkMode(it)
+                        },
                     )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("跟随系统", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "根据手机的浅色/深色模式自动切换",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(onClick = { onSetFollowSystemTheme(true) }) {
+                        Text(if (state.settings.followSystemTheme) "已开启" else "启用")
+                    }
                 }
             }
 

@@ -10,7 +10,9 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
@@ -315,6 +317,19 @@ class PomodoroActivity : ComponentActivity() {
         val breakMinutes = intent.getIntExtra("break_minutes", 5).coerceIn(1, 60)
         val rounds = intent.getIntExtra("rounds", 4).coerceIn(1, 12)
         val keepScreenOn = intent.getBooleanExtra("keep_screen", true)
+        val doNotDisturb = intent.getBooleanExtra("dnd", false)
+        val suppressUntil = if (doNotDisturb) {
+            val totalMinutes = (workMinutes + breakMinutes) * rounds + 5
+            System.currentTimeMillis() + totalMinutes * 60_000L
+        } else {
+            0L
+        }
+        getSharedPreferences(POMODORO_STATE_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SUPPRESS_REMINDERS, doNotDisturb)
+            .putLong(KEY_SUPPRESS_UNTIL, suppressUntil)
+            .apply()
+        if (doNotDisturb) enableSystemDoNotDisturb()
 
         setContent {
             val settings by settingsStore.settings.collectAsState(
@@ -329,11 +344,82 @@ class PomodoroActivity : ComponentActivity() {
                     breakSeconds = breakMinutes * 60L,
                     totalRounds = rounds,
                     keepScreenOn = keepScreenOn,
-                    onComplete = { finish() },
-                    onExit = { finish() },
+                    onComplete = {
+                        clearReminderSuppression()
+                        finish()
+                    },
+                    onExit = {
+                        clearReminderSuppression()
+                        finish()
+                    },
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        clearReminderSuppression()
+        super.onDestroy()
+    }
+
+    private fun clearReminderSuppression() {
+        val prefs = getSharedPreferences(POMODORO_STATE_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_SYSTEM_DND_CHANGED, false) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            val previousFilter = prefs.getInt(
+                KEY_PREVIOUS_INTERRUPTION_FILTER,
+                NotificationManager.INTERRUPTION_FILTER_ALL,
+            )
+            // Only restore a filter that this activity actually changed. If
+            // the user changed it manually while the timer was running, leave
+            // the user's current choice untouched.
+            if (notificationManager.isNotificationPolicyAccessGranted &&
+                notificationManager.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_NONE
+            ) {
+                runCatching { notificationManager.setInterruptionFilter(previousFilter) }
+            }
+        }
+        prefs
+            .edit()
+            .putBoolean(KEY_SUPPRESS_REMINDERS, false)
+            .putLong(KEY_SUPPRESS_UNTIL, 0L)
+            .putBoolean(KEY_SYSTEM_DND_CHANGED, false)
+            .remove(KEY_PREVIOUS_INTERRUPTION_FILTER)
+            .apply()
+    }
+
+    private fun enableSystemDoNotDisturb() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        if (!notificationManager.isNotificationPolicyAccessGranted) {
+            Toast.makeText(
+                this,
+                "系统免打扰权限未授予，本次仅屏蔽弦歌册提醒",
+                Toast.LENGTH_LONG,
+            ).show()
+            runCatching {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+            }
+            return
+        }
+        val prefs = getSharedPreferences(POMODORO_STATE_PREFS, MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_SYSTEM_DND_CHANGED, false)) {
+            prefs.edit()
+                .putInt(KEY_PREVIOUS_INTERRUPTION_FILTER, notificationManager.currentInterruptionFilter)
+                .putBoolean(KEY_SYSTEM_DND_CHANGED, true)
+                .apply()
+        }
+        runCatching {
+            notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
+        }
+    }
+
+    companion object {
+        const val POMODORO_STATE_PREFS = "pomodoro_state"
+        const val KEY_SUPPRESS_REMINDERS = "suppress_reminders"
+        const val KEY_SUPPRESS_UNTIL = "suppress_until"
+        const val KEY_PREVIOUS_INTERRUPTION_FILTER = "previous_interruption_filter"
+        const val KEY_SYSTEM_DND_CHANGED = "system_dnd_changed"
     }
 }
 

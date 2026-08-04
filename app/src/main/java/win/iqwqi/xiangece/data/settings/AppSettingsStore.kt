@@ -26,6 +26,7 @@ private const val SETTINGS_SCHEMA_VERSION = 1
 data class AppSettings(
     val onboardingComplete: Boolean = false,
     val darkMode: Boolean = false,
+    val followSystemTheme: Boolean = false,
     val themeSeed: String = "pine",
     val courseReminderMinutes: Int = 30,
     val taskReminderHoursFirst: Int = 24,
@@ -59,6 +60,7 @@ class AppSettingsStore @Inject constructor(
     private object Keys {
         val onboarding = booleanPreferencesKey("onboarding")
         val darkMode = booleanPreferencesKey("dark_mode")
+        val followSystemTheme = booleanPreferencesKey("follow_system_theme")
         val themeSeed = stringPreferencesKey("theme_seed")
         val courseReminder = intPreferencesKey("course_reminder")
         val taskReminderFirst = intPreferencesKey("task_reminder_first")
@@ -120,6 +122,7 @@ class AppSettingsStore @Inject constructor(
             AppSettings(
                 onboardingComplete = migrated[Keys.onboarding] ?: false,
                 darkMode = migrated[Keys.darkMode] ?: false,
+                followSystemTheme = migrated[Keys.followSystemTheme] ?: false,
                 themeSeed = migrated[Keys.themeSeed] ?: "pine",
                 courseReminderMinutes = migrated[Keys.courseReminder] ?: 30,
                 taskReminderHoursFirst = migrated[Keys.taskReminderFirst] ?: 24,
@@ -151,6 +154,7 @@ class AppSettingsStore @Inject constructor(
     suspend fun updateGeneral(
         onboardingComplete: Boolean? = null,
         darkMode: Boolean? = null,
+        followSystemTheme: Boolean? = null,
         courseReminderMinutes: Int? = null,
         taskReminderHoursFirst: Int? = null,
         taskReminderHoursSecond: Int? = null,
@@ -159,6 +163,7 @@ class AppSettingsStore @Inject constructor(
         context.settingsDataStore.edit { prefs ->
             onboardingComplete?.let { prefs[Keys.onboarding] = it }
             darkMode?.let { prefs[Keys.darkMode] = it }
+            followSystemTheme?.let { prefs[Keys.followSystemTheme] = it }
             courseReminderMinutes?.let { prefs[Keys.courseReminder] = it.coerceIn(0, 240) }
             taskReminderHoursFirst?.let { prefs[Keys.taskReminderFirst] = it.coerceIn(0, 720) }
             taskReminderHoursSecond?.let { prefs[Keys.taskReminderSecond] = it.coerceIn(0, 168) }
