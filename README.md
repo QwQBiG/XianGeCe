@@ -97,8 +97,8 @@
 
 ### 方式二：国内网盘（无梯子，国内速度快）
 
-- **夸克网盘**：<https://pan.quark.cn/s/edc1876d6a89>
-- **百度网盘**：<https://pan.baidu.com/s/1mVtkpbJvv5ZmWg0VcCHFMA> 提取码：`ydWI`
+- **夸克网盘**：<https://pan.quark.cn/s/92990ca1200b>
+- **百度网盘**：<https://pan.baidu.com/s/1tbVQ6AJAYNE5C4UjE_7jMw> 提取码：`MCSe`
 
 手机扫码或打开链接，下载 APK 后覆盖安装即可。
 
