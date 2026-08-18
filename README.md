@@ -33,23 +33,6 @@
 - Release 签名密钥不进入仓库，通过环境变量提供。
 - 不要把真实 API 密钥、签名文件或本地配置提交到 GitHub。
 
-## 构建项目
-
-```powershell
-.\gradlew.bat testDebugUnitTest
-.\gradlew.bat assembleDebug
-```
-
-Release 构建需要在本机设置签名环境变量：
-
-```powershell
-$env:XIANGECE_STORE_FILE = "D:\secure\xiangece-release.jks"
-$env:XIANGECE_STORE_PASSWORD = "本机环境变量"
-$env:XIANGECE_KEY_ALIAS = "xiangece"
-$env:XIANGECE_KEY_PASSWORD = "本机环境变量"
-.\gradlew.bat assembleRelease
-```
-
 ## 版本约定
 
 版本号采用 `主版本.次版本.修订版本`：
@@ -62,8 +45,7 @@ $env:XIANGECE_KEY_PASSWORD = "本机环境变量"
 
 ## 开源协议
 
-当前仓库使用 GPL-3.0，详见 [LICENSE](LICENSE)。如果未来需要闭源商业发行，应在发布前将协议改为 Apache-2.0，并同步更新 LICENSE、README 和版权声明。
-
+当前仓库使用 GPL-3.0，详见 [LICENSE](LICENSE)。
 ## 联系与隐私政策
 
 隐私政策、联系方式和公开说明：<https://iqwqi.win/cs/posts/xiangece/>
