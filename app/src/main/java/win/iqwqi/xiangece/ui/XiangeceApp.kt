@@ -21,6 +21,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
@@ -38,7 +43,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
@@ -100,7 +104,7 @@ private val destinations = listOf(
 )
 
 @Composable
-fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
+fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int = 0) {
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val imagePicker = rememberLauncherForActivityResult(
@@ -118,6 +122,12 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
     val timetableExcelPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { it?.let { uri -> viewModel.importTimetableFile(uri, "excel") } }
+    val ditingOfflinePackPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { it?.let(viewModel::importDitingOfflinePack) }
+    val offlineOcrPackPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { it?.let(viewModel::importOfflineOcrPack) }
     val timetableWallpaperPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { it?.let(viewModel::saveTimetableWallpaper) }
@@ -206,20 +216,20 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
         return
     }
 
-    val pagerState = rememberPagerState(pageCount = { destinations.size })
+    val pagerState = rememberPagerState(initialPage = initialPage.coerceIn(0, destinations.lastIndex), pageCount = { destinations.size })
     var courseNavExpanded by remember { mutableStateOf(true) }
     val currentPage by remember { derivedStateOf { pagerState.currentPage } }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(currentPage) {
-        courseNavExpanded = currentPage != 2 // courses is index 2
-    }
-    val requestAdjacent: (Int) -> Unit = { delta ->
-        val target = (currentPage + delta).coerceIn(0, destinations.lastIndex)
-        if (target != currentPage) {
-            scope.launch { pagerState.animateScrollToPage(target) }
+    LaunchedEffect(initialPage) {
+        val target = initialPage.coerceIn(0, destinations.lastIndex)
+        if (pagerState.currentPage != target) {
+            pagerState.animateScrollToPage(target)
         }
     }
 
+    LaunchedEffect(currentPage) {
+        courseNavExpanded = currentPage != 2 // courses is index 2
+    }
     val appContext = LocalContext.current.applicationContext
     val permissionState = remember { mutableStateOf(PermissionState()) }
     LaunchedEffect(
@@ -338,12 +348,18 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface),
+                            .background(MaterialTheme.colorScheme.surface)
+                            // Keep the complete Material navigation bar above legacy
+                            // three-button navigation. Applying the inset outside the
+                            // bar avoids compressing and clipping its icon/label area.
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+                            ),
                     ) {
                         NavigationBar(
                             modifier = Modifier.fillMaxWidth(),
                             containerColor = MaterialTheme.colorScheme.surface,
-                            windowInsets = NavigationBarDefaults.windowInsets,
+                            windowInsets = WindowInsets(0, 0, 0, 0),
                         ) {
                             destinations.forEachIndexed { index, destination ->
                                 NavigationBarItem(
@@ -375,8 +391,9 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                // 提前渲染相邻页，避免左右切换时下一页（尤其课程页解码壁纸）出现加载顿挫
+                // 课程页会在课表实际超出屏幕宽度时自行接管横滑；其余位置仍可切换主页面。
                 beyondViewportPageCount = 1,
+                userScrollEnabled = true,
             ) { page ->
                 when (page) {
                     0 -> TodayScreen(
@@ -437,7 +454,6 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         },
                         onClearWallpaper = viewModel::clearTimetableWallpaper,
                         onSaveBackgroundOptions = viewModel::saveTimetableBackgroundOptions,
-                        onNavigateAdjacent = requestAdjacent,
                     )
                     3 -> ToolboxScreen(
                         state = state,
@@ -453,6 +469,7 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         onOpenAiSettings = {
                             scope.launch { pagerState.animateScrollToPage(4) }
                         },
+                         onOpenResources = { scope.launch { pagerState.animateScrollToPage(4) } },
                     )
                     4 -> SettingsScreen(
                         state = state,
@@ -466,6 +483,8 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         onSaveTimetableLayout = viewModel::saveTimetableLayout,
                         onSaveAi = viewModel::saveAiSettings,
                         onTestAi = viewModel::testAiConnection,
+                        onSaveDitingTranscription = viewModel::saveDitingTranscription,
+                        onSaveDitingAiAnnotation = viewModel::saveDitingAiAnnotation,
                         onExport = { exportLauncher.launch("弦歌册-${java.time.LocalDate.now()}.xiangece") },
                         onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                         onPickImage = {
@@ -489,6 +508,18 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel) {
                         onRequestTestNotificationRuntime = requestTestNotificationRuntime,
                         onOpenNotificationSettings = openNotificationSettings,
                         onOpenExactAlarmSettings = openExactAlarmSettings,
+                         onDownloadDitingOfflinePack = viewModel::startDitingOfflinePackDownload,
+                         onCancelDitingOfflinePackDownload = viewModel::cancelDitingOfflinePackDownload,
+                         onDeleteDitingOfflinePack = viewModel::deleteDitingOfflinePack,
+                         onImportDitingOfflinePack = {
+                             ditingOfflinePackPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                         },
+                         onDownloadOfflineOcrPack = viewModel::startOfflineOcrPackDownload,
+                         onCancelOfflineOcrPackDownload = viewModel::cancelOfflineOcrPackDownload,
+                         onDeleteOfflineOcrPack = viewModel::deleteOfflineOcrPack,
+                         onImportOfflineOcrPack = {
+                             offlineOcrPackPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                         },
                     )
                 }
             }

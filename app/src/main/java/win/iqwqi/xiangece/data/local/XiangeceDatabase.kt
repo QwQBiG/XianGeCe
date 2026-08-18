@@ -3,6 +3,10 @@ package win.iqwqi.xiangece.data.local
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import win.iqwqi.xiangece.feature.diting.data.DitingDao
+import win.iqwqi.xiangece.feature.diting.data.DitingMarkerEntity
+import win.iqwqi.xiangece.feature.diting.data.DitingSegmentEntity
+import win.iqwqi.xiangece.feature.diting.data.DitingSessionEntity
 
 @Database(
     entities = [
@@ -22,57 +26,93 @@ import androidx.room.TypeConverters
         HabitCheckinEntity::class,
         CustomQuoteEntity::class,
         ExpenseRecordEntity::class,
+        DitingSessionEntity::class,
+        DitingSegmentEntity::class,
+        DitingMarkerEntity::class,
     ],
-    version = 5,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
 abstract class XiangeceDatabase : RoomDatabase() {
     abstract fun campusDao(): CampusDao
     abstract fun expenseDao(): ExpenseDao
+    abstract fun ditingDao(): DitingDao
 
     companion object {
-        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+        val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                db.execSQL(
-                    """CREATE TABLE IF NOT EXISTS custom_quotes (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        text TEXT NOT NULL,
-                        author TEXT NOT NULL DEFAULT '',
-                        isBuiltIn INTEGER NOT NULL DEFAULT 0,
-                        orderIndex INTEGER NOT NULL DEFAULT 0,
-                        createdAtEpochMillis INTEGER NOT NULL DEFAULT 0
-                    )""",
-                )
-                // 预置内置箴言
-                val builtIns = listOf(
-                    "不积跬步，无以至千里；不积小流，无以成江海。",
-                    "锲而舍之，朽木不折；锲而不舍，金石可镂。",
-                    "千里之行，始于足下。",
-                    "天行健，君子以自强不息。",
-                    "合抱之木，生于毫末；九层之台，起于累土。",
-                    "每日一善，功不唐捐。",
-                    "日拱一卒，功不唐捐。",
-                    "有志者事竟成。",
-                    "业精于勤，荒于嬉。",
-                    "博观而约取，厚积而薄发。",
-                    "士不可以不弘毅，任重而道远。",
-                    "知之者不如好之者，好之者不如乐之者。",
-                    "纸上得来终觉浅，绝知此事要躬行。",
-                    "千淘万漉虽辛苦，吹尽狂沙始到金。",
-                    "宝剑锋从磨砺出，梅花香自苦寒来。",
-                    "随风潜入夜，润物细无声。",
-                    "读书破万卷，下笔如有神。",
-                    "学而不思则罔，思而不学则殆。",
-                    "温故而知新，可以为师矣。",
-                    "见贤思齐焉，见不贤而内自省也。",
-                )
-                builtIns.forEachIndexed { index, text ->
-                    db.execSQL(
-                        "INSERT INTO custom_quotes (text, author, isBuiltIn, orderIndex, createdAtEpochMillis) VALUES (?, ?, 1, ?, ?)",
-                        arrayOf<Any>(text, "", index, System.currentTimeMillis() + index),
-                    )
-                }
+                db.execSQL("ALTER TABLE diting_segments ADD COLUMN errorMessage TEXT")
+            }
+        }
+
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE diting_sessions ADD COLUMN aiAnnotationEnabled INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE diting_sessions ADD COLUMN glossary TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS diting_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    title TEXT NOT NULL,
+                    courseId INTEGER,
+                    meetingId INTEGER,
+                    mode TEXT NOT NULL,
+                    languageMode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    audioDirectory TEXT NOT NULL,
+                    audioPath TEXT NOT NULL,
+                    startedAtEpochMillis INTEGER,
+                    endedAtEpochMillis INTEGER,
+                    durationMillis INTEGER NOT NULL,
+                    audioBytes INTEGER NOT NULL,
+                    cloudTranscriptionEnabled INTEGER NOT NULL,
+                    transcriptionEngine TEXT NOT NULL,
+                    errorMessage TEXT,
+                    createdAtEpochMillis INTEGER NOT NULL,
+                    updatedAtEpochMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diting_sessions_startedAtEpochMillis ON diting_sessions(startedAtEpochMillis)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diting_sessions_courseId ON diting_sessions(courseId)")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS diting_segments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    sessionId INTEGER NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    startMillis INTEGER NOT NULL,
+                    endMillis INTEGER NOT NULL,
+                    audioPath TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    rawText TEXT NOT NULL,
+                    isFinal INTEGER NOT NULL,
+                    confidence REAL,
+                    language TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    createdAtEpochMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diting_segments_sessionId ON diting_segments(sessionId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_diting_segments_sessionId_sequence ON diting_segments(sessionId, sequence)")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS diting_markers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    sessionId INTEGER NOT NULL,
+                    segmentId INTEGER,
+                    positionMillis INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    confidence REAL,
+                    source TEXT NOT NULL,
+                    createdAtEpochMillis INTEGER NOT NULL
+                )""")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diting_markers_sessionId ON diting_markers(sessionId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diting_markers_segmentId ON diting_markers(segmentId)")
             }
         }
 

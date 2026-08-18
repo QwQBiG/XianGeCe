@@ -164,12 +164,7 @@ fun TodayScreen(
         .sortedByDescending { it.createdAtEpochMillis }
     val tasks = if (showCompleted) completedTasks else pendingTasks
     val events = state.events.filter { it.startsAtEpochMillis >= now }.take(3)
-    val nextCourse = ScheduleCalculator.nextCourse(
-        meetings = state.meetings,
-        semester = semester,
-        periods = state.periods,
-        nowEpochMillis = now,
-    )
+
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
@@ -225,7 +220,6 @@ fun TodayScreen(
         }
         item {
             val currentCourse = currentMeeting?.let { meeting -> state.courses.firstOrNull { it.id == meeting.courseId } }
-            val minutesToNext = nextCourse?.startsAtEpochMillis?.minus(now)?.div(60_000L)?.toInt()
             PaperCard {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -234,11 +228,7 @@ fun TodayScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            when {
-                                currentCourse != null -> "正在上课"
-                                minutesToNext != null && minutesToNext in 0..180 -> "距离下一节 ${minutesToNext} 分钟"
-                                else -> "今日进度"
-                            },
+                            "今日共 ${allTodayMeetings.size} 节",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -248,7 +238,7 @@ fun TodayScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                     }
-                    Text("今日共 ${todayMeetings.size} 节", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("今日剩余 ${todayMeetings.size} 节", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

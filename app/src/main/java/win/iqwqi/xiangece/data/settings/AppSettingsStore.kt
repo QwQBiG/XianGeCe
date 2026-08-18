@@ -42,6 +42,9 @@ data class AppSettings(
     val aiAuthHeader: String = "Authorization: Bearer {key}",
     val aiSupportsVision: Boolean = false,
     val encryptedApiKey: String = "",
+    val ditingTranscriptionModel: String = "whisper-1",
+    val ditingTranscriptionEndpoint: String = "",
+    val ditingAiAnnotationEnabled: Boolean = false,
     val timetableColumnWidthDp: Int = 46,
     val timetableRowHeightDp: Int = 74,
     val timetablePeriodCount: Int = 16,
@@ -76,6 +79,9 @@ class AppSettingsStore @Inject constructor(
         val aiAuthHeader = stringPreferencesKey("ai_auth_header")
         val aiSupportsVision = booleanPreferencesKey("ai_supports_vision")
         val encryptedApiKey = stringPreferencesKey("ai_key")
+        val ditingTranscriptionModel = stringPreferencesKey("diting_transcription_model")
+        val ditingTranscriptionEndpoint = stringPreferencesKey("diting_transcription_endpoint")
+        val ditingAiAnnotationEnabled = booleanPreferencesKey("diting_ai_annotation_enabled")
         val timetableColumnWidth = intPreferencesKey("timetable_column_width")
         val timetableRowHeight = intPreferencesKey("timetable_row_height")
         val timetablePeriodCount = intPreferencesKey("timetable_period_count")
@@ -139,6 +145,9 @@ class AppSettingsStore @Inject constructor(
                 aiAuthHeader = migrated[Keys.aiAuthHeader] ?: "Authorization: Bearer {key}",
                 aiSupportsVision = migrated[Keys.aiSupportsVision] ?: false,
                 encryptedApiKey = migrated[Keys.encryptedApiKey].orEmpty(),
+                ditingTranscriptionModel = migrated[Keys.ditingTranscriptionModel] ?: "whisper-1",
+                ditingTranscriptionEndpoint = migrated[Keys.ditingTranscriptionEndpoint].orEmpty(),
+                ditingAiAnnotationEnabled = migrated[Keys.ditingAiAnnotationEnabled] ?: false,
                 timetableColumnWidthDp = migrated[Keys.timetableColumnWidth] ?: 46,
                 timetableRowHeightDp = migrated[Keys.timetableRowHeight] ?: 74,
                 timetablePeriodCount = migrated[Keys.timetablePeriodCount] ?: 16,
@@ -221,6 +230,19 @@ class AppSettingsStore @Inject constructor(
         }
     }
 
+    suspend fun updateDitingTranscription(model: String, endpoint: String) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.ditingTranscriptionModel] = model.trim().ifBlank { "whisper-1" }
+            prefs[Keys.ditingTranscriptionEndpoint] = endpoint.trim().trimEnd('/' )
+        }
+    }
+
+    suspend fun updateDitingAiAnnotationEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.ditingAiAnnotationEnabled] = enabled
+        }
+    }
+
     suspend fun updateGradePreferences(scheme: String, customRules: String) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.gradeScheme] = scheme.takeIf { it in setOf("4.0", "4.3", "5.0", "自定义") } ?: "4.0"
@@ -268,6 +290,7 @@ class AppSettingsStore @Inject constructor(
             supportsVision = value.aiSupportsVision,
             encryptedApiKey = "",
         )
+        updateDitingTranscription(value.ditingTranscriptionModel, value.ditingTranscriptionEndpoint)
         updateGradePreferences(
             scheme = value.gradeScheme,
             customRules = value.customGradeRules,

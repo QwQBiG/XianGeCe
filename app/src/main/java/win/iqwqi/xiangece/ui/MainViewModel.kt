@@ -2,6 +2,7 @@ package win.iqwqi.xiangece.ui
 
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,7 +19,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import win.iqwqi.xiangece.core.ai.AiCampusEnhancer
@@ -28,7 +31,14 @@ import win.iqwqi.xiangece.core.importing.PdfTimetableImporter
 import win.iqwqi.xiangece.core.importing.SharedInput
 import win.iqwqi.xiangece.core.importing.TabularTimetableImporter
 import win.iqwqi.xiangece.core.importing.TimetableCodeCodec
+import win.iqwqi.xiangece.core.ocr.OfflineOcrPackManager
+import win.iqwqi.xiangece.core.ocr.OfflineOcrPackState
+import win.iqwqi.xiangece.core.ocr.OfflineOcrService
 import win.iqwqi.xiangece.core.reminder.ReminderScheduler
+import win.iqwqi.xiangece.feature.diting.data.DitingRepository
+import win.iqwqi.xiangece.feature.diting.offline.DitingOfflinePackManager
+import win.iqwqi.xiangece.feature.diting.offline.DitingOfflineTranscriber
+import win.iqwqi.xiangece.feature.diting.offline.DitingOfflinePackState
 import win.iqwqi.xiangece.core.reminder.ReminderTargets
 import win.iqwqi.xiangece.core.security.ApiKeyCipher
 import win.iqwqi.xiangece.data.CampusRepository
@@ -56,6 +66,7 @@ import win.iqwqi.xiangece.domain.parser.TimetableCandidate
 import win.iqwqi.xiangece.domain.parser.DraftConfirmationFields
 import win.iqwqi.xiangece.domain.parser.DraftConfirmationValidator
 import win.iqwqi.xiangece.domain.parser.PdfTextTimetableParser
+import win.iqwqi.xiangece.domain.parser.TimetableImageParser
 import win.iqwqi.xiangece.domain.semester.CourseConflictDetector
 
 data class DraftEditorState(
@@ -94,6 +105,8 @@ data class AppUiState(
     val isWorking: Boolean = false,
     val lastCelebratedEpochDay: Long = -1L,
     val celebrationDismissedEpochDay: Long = -1L,
+    val offlineOcrPack: OfflineOcrPackState = OfflineOcrPackState(),
+    val ditingOfflinePack: DitingOfflinePackState = DitingOfflinePackState(),
 )
 
 /**
@@ -187,6 +200,12 @@ class MainViewModel @Inject constructor(
     private val reminderScheduler: ReminderScheduler,
     private val tabularTimetableImporter: TabularTimetableImporter,
     private val pdfTimetableImporter: PdfTimetableImporter,
+    private val timetableImageParser: TimetableImageParser,
+    private val offlineOcrPackManager: OfflineOcrPackManager,
+    private val ditingRepository: DitingRepository,
+    private val ditingOfflinePackManager: DitingOfflinePackManager,
+    private val ditingOfflineTranscriber: DitingOfflineTranscriber,
+    private val offlineOcrService: OfflineOcrService,
 ) : ViewModel() {
     private val editor = MutableStateFlow<DraftEditorState?>(null)
     private val timetableEditor = MutableStateFlow<TimetableEditorState?>(null)
@@ -284,10 +303,14 @@ class MainViewModel @Inject constructor(
         baseUiState,
         lastCelebratedEpochDay,
         celebrationDismissedEpochDay,
-    ) { base, celebratedDay, dismissedDay ->
+        offlineOcrPackManager.state,
+        ditingOfflinePackManager.state,
+    ) { base, celebratedDay, dismissedDay, offlineOcrPack, ditingOfflinePack ->
         base.copy(
             lastCelebratedEpochDay = celebratedDay,
             celebrationDismissedEpochDay = dismissedDay,
+            offlineOcrPack = offlineOcrPack,
+            ditingOfflinePack = ditingOfflinePack,
         )
     }.stateIn(viewModelScope, SharingStarted.Lazily, AppUiState())
 
@@ -316,29 +339,127 @@ class MainViewModel @Inject constructor(
             withWorking {
                 val file = importer.copyToPrivateStorage(uri)
                 val id = repository.createImageInbox(file.absolutePath)
-                val settings = settingsStore.settings.first()
                 val endWeek = repository.currentSemester()?.weekCount ?: 20
                 val maxPeriods = repository.allPeriods().maxOfOrNull { it.periodIndex } ?: 16
-                aiEnhancer.recognizeTimetableImage(file, settings, maxPeriods, endWeek)
-                    .onSuccess { content ->
-                        val candidates = parseAiTimetable(content, endWeek, maxPeriods)
-                        if (candidates.isEmpty()) {
-                            repository.failOcr(id, "AI 没有返回可导入课程，请换 HTML/PDF/Excel 或重新截图")
-                            messages.emit("AI 没有返回可导入课程")
-                        } else {
-                            repository.finishOcr(id, content)
-                            openTimetableEditor(id, content, candidates, endWeek, "AI 截图识别")
-                            messages.emit("AI 识别出 ${candidates.size} 个上课时段，请核对")
+                if (offlineOcrService.isReady()) {
+                    recognizeTimetableImageOffline(file, id, endWeek, maxPeriods)
+                } else {
+                    val settings = settingsStore.settings.first()
+                    aiEnhancer.recognizeTimetableImage(file, settings, maxPeriods, endWeek)
+                        .onSuccess { content ->
+                            val candidates = parseAiTimetable(content, endWeek, maxPeriods)
+                            if (candidates.isEmpty()) {
+                                repository.failOcr(id, "AI 没有返回可导入课程，请换 HTML/PDF/Excel 或重新截图")
+                                messages.emit("AI 没有返回可导入课程")
+                            } else {
+                                repository.finishOcr(id, content)
+                                openTimetableEditor(id, content, candidates, endWeek, "AI 截图识别")
+                                messages.emit("AI 识别出 " + candidates.size + " 个上课时段，请核对")
+                            }
                         }
-                    }
-                    .onFailure {
-                        repository.failOcr(id, it.message ?: "AI 截图识别失败")
-                        messages.emit(it.message ?: "AI 截图识别失败")
-                    }
+                        .onFailure {
+                            repository.failOcr(id, it.message ?: "AI 截图识别失败")
+                            messages.emit(it.message ?: "AI 截图识别失败")
+                        }
+                }
             }
         }
     }
 
+    fun startOfflineOcrPackDownload() = offlineOcrPackManager.startChineseDownload()
+
+    fun cancelOfflineOcrPackDownload() = offlineOcrPackManager.cancelDownload()
+
+    fun importOfflineOcrPack(uri: Uri) {
+        viewModelScope.launch {
+            offlineOcrService.release()
+            offlineOcrPackManager.importChinesePack(uri)
+        }
+    }
+
+    fun startDitingOfflinePackDownload() = ditingOfflinePackManager.startChineseDownload()
+
+    fun cancelDitingOfflinePackDownload() = ditingOfflinePackManager.cancelDownload()
+
+    fun importDitingOfflinePack(uri: Uri) {
+        viewModelScope.launch {
+            if (ditingRepository.hasActiveSession()) {
+                messages.emit("课堂录音进行中，不能更换离线语音包")
+                return@launch
+            }
+            ditingOfflineTranscriber.release()
+            ditingOfflinePackManager.importChinesePack(uri)
+        }
+    }
+
+    fun deleteDitingOfflinePack() {
+        viewModelScope.launch {
+            if (ditingRepository.hasActiveSession()) {
+                messages.emit("课堂录音进行中，不能删除离线语音包")
+                return@launch
+            }
+            ditingOfflineTranscriber.release()
+            ditingOfflinePackManager.deleteChinesePack()
+        }
+    }
+
+    fun deleteOfflineOcrPack() {
+        viewModelScope.launch {
+            offlineOcrService.release()
+            offlineOcrPackManager.deleteChinesePack()
+        }
+    }
+
+    private suspend fun recognizeTimetableImageOffline(
+        file: File,
+        inboxId: Long,
+        endWeek: Int,
+        maxPeriods: Int,
+    ) {
+        runCatching {
+            withContext(Dispatchers.Default) {
+                offlineOcrService.recognize(file)
+            }
+        }
+            .onSuccess { result ->
+                val candidates = withContext(Dispatchers.Default) {
+                    timetableImageParser.parse(result.page, endWeek, maxPeriods)
+                }
+                if (candidates.isEmpty()) {
+                    repository.failOcr(inboxId, "本机 OCR 已识别文字，但没有定位出课程格子；可改用 AI 或导入 PDF/Excel")
+                    messages.emit("本机 OCR 未定位出课程，请换一张包含完整表头的课表截图")
+                } else {
+                    repository.finishOcr(inboxId, result.page.text)
+                    openTimetableEditor(inboxId, result.page.text, candidates, endWeek, "免费中文离线 OCR")
+                    messages.emit("本机 OCR 识别出 " + candidates.size + " 个上课时段，请核对")
+                }
+            }
+            .onFailure { error ->
+                Log.e("MainViewModel", "Offline timetable OCR failed", error)
+                val message = offlineOcrUserMessage(error)
+                repository.failOcr(inboxId, message)
+                messages.emit(message)
+            }
+    }
+
+    private suspend fun recognizeInboxImage(file: File, inboxId: Long): Boolean {
+        if (!offlineOcrService.isReady()) return false
+        repository.markOcrProcessing(inboxId)
+        return try {
+            val result = withContext(Dispatchers.Default) { offlineOcrService.recognize(file) }
+            repository.finishOcr(inboxId, result.page.text)
+            // OCR 与通知文字走同一条草稿解析链路：识别成功后直接弹出确认草稿。
+            repository.inboxById(inboxId)?.let { openInboxInternal(it) }
+            messages.emit("图片已用本机 OCR 识别，共 ${result.lineCount} 行，请核对草稿")
+            true
+        } catch (error: Throwable) {
+            Log.e("MainViewModel", "Offline inbox OCR failed", error)
+            val message = offlineOcrUserMessage(error)
+            repository.failOcr(inboxId, message)
+            messages.emit(message)
+            false
+        }
+    }
     fun importTimetableFile(uri: Uri, format: String) {
         viewModelScope.launch {
             withWorking {
@@ -972,6 +1093,20 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    fun saveDitingTranscription(model: String, endpoint: String) {
+        viewModelScope.launch {
+            settingsStore.updateDitingTranscription(model, endpoint)
+            messages.emit("谛听转写设置已保存")
+        }
+    }
+
+    fun saveDitingAiAnnotation(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.updateDitingAiAnnotationEnabled(enabled)
+            messages.emit(if (enabled) "谛听 AI 自动标注已开启" else "谛听 AI 自动标注已关闭")
+        }
+    }
+
     fun testAiConnection(
         enabled: Boolean,
         provider: String,
@@ -1278,8 +1413,12 @@ class MainViewModel @Inject constructor(
                     messages.emit("原始图片副本已不存在，请重新导入")
                     return@withWorking
                 }
-                repository.failOcr(item.id, "本地 OCR 已移除；请在设置中配置支持视觉的 AI 后使用 AI 识别")
-                messages.emit("本地 OCR 已移除，请使用 AI 识别")
+                if (offlineOcrService.isReady()) {
+                    recognizeInboxImage(file, item.id)
+                } else {
+                    repository.failOcr(item.id, "免费中文离线 OCR 尚未安装；请在「百宝」下载 OCR 包后重试")
+                    messages.emit("请先在「百宝」下载免费中文离线 OCR 包")
+                }
             }
         }
     }
@@ -1410,8 +1549,13 @@ class MainViewModel @Inject constructor(
             val today = LocalDate.now(ZoneId.systemDefault()).toEpochDay()
             val checkedIn = repository.toggleHabitCheckin(habitId, today)
             if (checkedIn) {
-                val allDone = uiState.value.habits.isNotEmpty() &&
-                    uiState.value.habits.all { it.id in uiState.value.habitStats.todayCompletedHabitIds }
+                // 不能从 uiState 判断最后一次打卡：数据库写入和 StateFlow 刷新之间
+                // 有一个很短的窗口，旧实现会因此漏掉“今日全部完成”的鼓励弹窗。
+                val habits = repository.habitTemplates.first()
+                val checkins = repository.habitCheckins.first()
+                val allDone = habits.isNotEmpty() && habits.all { habit ->
+                    checkins.any { it.habitId == habit.id && it.checkinDateEpochDay == today }
+                }
                 if (allDone) {
                     lastCelebratedEpochDay.value = today
                     messages.emit("今日厚积已成")
@@ -1462,8 +1606,12 @@ class MainViewModel @Inject constructor(
                     is SharedInput.Image -> {
                         val file = importer.copyToPrivateStorage(input.uri)
                         val id = repository.createImageInbox(file.absolutePath)
-                        repository.failOcr(id, "本地 OCR 已移除；请在设置中配置支持视觉的 AI 后识别图片")
-                        messages.emit("图片已保存；请配置 AI 后使用云端识别")
+                        if (offlineOcrService.isReady()) {
+                            recognizeInboxImage(file, id)
+                        } else {
+                            repository.failOcr(id, "图片已保存；免费中文离线 OCR 尚未安装，请在「百宝」下载后重试")
+                            messages.emit("图片已保存；请在「百宝」下载免费中文离线 OCR 包后重试")
+                        }
                     }
                 }
             }
@@ -1560,6 +1708,18 @@ private fun parseDateTime(value: String): Long? = runCatching {
         .toInstant()
         .toEpochMilli()
 }.getOrNull()
+
+private fun offlineOcrUserMessage(error: Throwable): String {
+    val message = error.message.orEmpty()
+    val safeUserMessage = message.takeIf {
+        it.startsWith("图片") ||
+            it.startsWith("原始图片") ||
+            it.startsWith("请先") ||
+            it.contains("OCR 包") ||
+            it.contains("没有识别到文字")
+    }
+    return safeUserMessage ?: "本机 OCR 暂时没有完成，请换一张清晰图片或稍后重试。"
+}
 
 private fun parseClock(value: String): Int? {
     val parts = value.trim().split(':', '：')

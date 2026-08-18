@@ -45,6 +45,14 @@ private data class ChatRequest(
 )
 
 @Serializable
+private data class DitingChatRequest(
+    val model: String,
+    val messages: List<ChatMessage>,
+    val temperature: Double = 0.0,
+    val max_tokens: Int = 360,
+)
+
+@Serializable
 private data class VisionChatRequest(
     val model: String,
     val messages: List<VisionMessage>,
@@ -65,7 +73,7 @@ class AiCampusEnhancer @Inject constructor(
     private val cipher: ApiKeyCipher,
 ) {
     suspend fun testConnection(settings: AppSettings): Result<Unit> =
-        request(settings, "只回复一个 JSON 对象：{\"ok\":true}").map { Unit }
+        request(settings, "只回复一个 JSON 对象：{\"ok\":true}").map { }
 
     suspend fun enhance(
         text: String,
@@ -164,6 +172,42 @@ class AiCampusEnhancer @Inject constructor(
         }
     }
 
+    suspend fun annotateDiting(prompt: String, settings: AppSettings): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(settings.aiEnabled) { "请先在我的 → AI 服务中启用 AI" }
+            require(settings.aiBaseUrl.startsWith("https://") || settings.aiBaseUrl.startsWith("http://")) {
+                "接口地址必须以 http:// 或 https:// 开头"
+            }
+            require(settings.aiModel.isNotBlank()) { "请填写模型名称" }
+            val apiKey = cipher.decrypt(settings.encryptedApiKey)
+            require(apiKey.isNotBlank()) { "API 密钥为空或无法解密" }
+            val endpoint = settings.aiBaseUrl.trimEnd('/') + "/chat/completions"
+            val body = json.encodeToString(
+                DitingChatRequest(
+                    model = settings.aiModel,
+                    messages = listOf(
+                        ChatMessage("system", "你是课堂文字标注器。只返回合法 JSON 数组，不使用 Markdown，不解释。"),
+                        ChatMessage("user", prompt),
+                    ),
+                ),
+            ).toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url(endpoint)
+                .applyAuth(settings.aiAuthHeader, apiKey)
+                .header("Accept", "application/json")
+                .post(body)
+                .build()
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body.string()
+                if (!response.isSuccessful) {
+                    throw IOException("接口返回 ${response.code}：${responseBody.take(160)}")
+                }
+                json.decodeFromString<ChatResponse>(responseBody)
+                    .choices.firstOrNull()?.message?.content
+                    ?: throw IOException("接口没有返回可用内容")
+            }
+        }
+    }
     private suspend fun request(settings: AppSettings, userPrompt: String): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {

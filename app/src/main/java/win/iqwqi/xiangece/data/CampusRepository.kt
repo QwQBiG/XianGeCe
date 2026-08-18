@@ -471,17 +471,14 @@ class CampusRepository @Inject constructor(
 
     suspend fun seedBuiltInQuotesIfEmpty() {
         if (dao.allCustomQuotes().any { it.isBuiltIn }) return
-        val builtIns = listOf(
-            "不积跬步，无以至千里；不积小流，无以成江海。" to "荀子",
-            "锲而不舍，金石可镂。" to "荀子",
-            "千里之行，始于足下。" to "老子",
-            "天行健，君子以自强不息。" to "周易",
-            "博观而约取，厚积而薄发。" to "苏轼",
-            "业精于勤，荒于嬉。" to "韩愈",
-        )
         dao.upsertCustomQuotes(
-            builtIns.mapIndexed { i, (text, author) ->
-                CustomQuoteEntity(text = text, author = author, isBuiltIn = true, orderIndex = i)
+            BuiltInQuotes.entries.mapIndexed { i, quote ->
+                CustomQuoteEntity(
+                    text = quote.text,
+                    author = quote.author,
+                    isBuiltIn = true,
+                    orderIndex = i,
+                )
             },
         )
     }

@@ -1,0 +1,10 @@
+{
+  "versionCode": 2,
+  "versionName": "0.0.1",
+  "mandatory": true,
+  "minSupportedVersionCode": 1,
+  "apkUrl": "https://github.com/QwQBiG/XianGeCe/releases/latest/download/xiangece.apk",
+  "sha256": "替换为APK的SHA-256",
+  "releaseNotes": "本次更新优化了稳定性和用户体验。",
+  "downloadPageUrl": "https://github.com/QwQBiG/XianGeCe/releases/latest"
+}

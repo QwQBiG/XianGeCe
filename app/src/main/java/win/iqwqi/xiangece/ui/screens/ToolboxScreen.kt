@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.EventAvailable
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Savings
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.TrendingUp
@@ -71,6 +72,7 @@ import java.util.Locale
 import kotlin.math.*
 import win.iqwqi.xiangece.data.local.CampusEventEntity
 import win.iqwqi.xiangece.data.local.PeriodTemplateEntity
+import win.iqwqi.xiangece.feature.diting.ui.DitingActivity
 import win.iqwqi.xiangece.domain.grade.GradeCalculator
 import win.iqwqi.xiangece.ui.AppUiState
 import win.iqwqi.xiangece.ui.components.AppFormSheet
@@ -95,6 +97,7 @@ fun ToolboxScreen(
     onDeleteGrade: (Long) -> Unit,
     onSaveGradePreferences: (String, String) -> Unit,
     onOpenAiSettings: () -> Unit = {},
+    onOpenResources: () -> Unit = {},
 ) {
     var noticeText by remember { mutableStateOf("") }
     var useAi by remember(state.settings.aiEnabled) { mutableStateOf(state.settings.aiEnabled) }
@@ -103,6 +106,7 @@ fun ToolboxScreen(
 
     val tools = remember(state.settings.aiEnabled, state.settings.aiProvider) {
         listOf(
+            ToolItem("谛听", "课堂录音", Icons.Outlined.Mic) { context.startActivity(Intent(context, DitingActivity::class.java)) },
             ToolItem("成绩", "GPA / 加权", Icons.Outlined.TrendingUp) { panel = ToolboxPanel.GRADE },
             ToolItem("课程时间", "同步课表", Icons.Outlined.AccessTime) { panel = ToolboxPanel.PERIOD },
             ToolItem("考试倒计时", "天数 / 提醒", Icons.Outlined.EventAvailable) { panel = ToolboxPanel.EXAM },
@@ -131,7 +135,7 @@ fun ToolboxScreen(
                     Icon(Icons.AutoMirrored.Outlined.TextSnippet, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Column {
                         Text("通知 / 图片转日程", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text("文字可离线整理；图片识别使用你配置的视觉 AI，原图不会上传到弦歌册。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("文字转日程；图片识别可使用免费离线 OCR。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(
@@ -149,6 +153,7 @@ fun ToolboxScreen(
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onOpenResources) { Text("我的资源") }
                         TextButton(onClick = onOpenAiSettings) { Text("AI 设置") }
                         Switch(useAi, { useAi = it }, enabled = state.settings.aiEnabled)
                     }

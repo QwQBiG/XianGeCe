@@ -38,7 +38,11 @@ import win.iqwqi.xiangece.data.local.TimetableEntity
 import win.iqwqi.xiangece.data.local.XiangeceDatabase
 import win.iqwqi.xiangece.data.settings.AppSettings
 import win.iqwqi.xiangece.data.settings.AppSettingsStore
-
+import win.iqwqi.xiangece.feature.diting.audio.DitingAudioStore
+import win.iqwqi.xiangece.feature.diting.data.DitingDao
+import win.iqwqi.xiangece.feature.diting.data.DitingMarkerEntity
+import win.iqwqi.xiangece.feature.diting.data.DitingSegmentEntity
+import win.iqwqi.xiangece.feature.diting.data.DitingSessionEntity
 @Serializable
 data class BackupPayload(
     val formatVersion: Int = 1,
@@ -59,6 +63,9 @@ data class BackupPayload(
     val reminders: List<ReminderEntity>,
     val habitTemplates: List<HabitTemplateEntity> = emptyList(),
     val habitCheckins: List<HabitCheckinEntity> = emptyList(),
+    val ditingSessions: List<DitingSessionEntity> = emptyList(),
+    val ditingSegments: List<DitingSegmentEntity> = emptyList(),
+    val ditingMarkers: List<DitingMarkerEntity> = emptyList(),
 )
 
 internal object BackupPayloadValidator {
@@ -78,21 +85,31 @@ internal object BackupPayloadValidator {
         require(payload.reminders.size <= 20_000) { "提醒数据过多" }
         require(payload.habitTemplates.size <= 2_000) { "长期事项数据过多" }
         require(payload.habitCheckins.size <= 200_000) { "打卡数据过多" }
+        require(payload.ditingSessions.size <= 10_000) { "课堂录音记录过多" }
+        require(payload.ditingSegments.size <= 100_000) { "课堂转写分段过多" }
+        require(payload.ditingMarkers.size <= 100_000) { "课堂标记过多" }
 
         val courseIds = payload.courses.map { it.id }.toSet()
         val timetableIds = payload.timetables.map { it.id }.toSet()
         val inboxIds = payload.inbox.map { it.id }.toSet()
         val habitIds = payload.habitTemplates.map { it.id }.toSet()
+        val ditingSessionIds = payload.ditingSessions.map { it.id }.toSet()
+        val ditingSegmentIds = payload.ditingSegments.map { it.id }.toSet()
         require(courseIds.size == payload.courses.size) { "课程 ID 重复" }
         require(timetableIds.size == payload.timetables.size) { "课表 ID 重复" }
         require(inboxIds.size == payload.inbox.size) { "收件 ID 重复" }
         require(habitIds.size == payload.habitTemplates.size) { "长期事项 ID 重复" }
+        require(ditingSessionIds.size == payload.ditingSessions.size) { "课堂记录 ID 重复" }
+        require(ditingSegmentIds.size == payload.ditingSegments.size) { "课堂分段 ID 重复" }
         require(payload.courses.all { it.timetableId in timetableIds }) { "课程引用了不存在的课表" }
         require(payload.meetings.all { it.timetableId in timetableIds }) { "上课时段引用了不存在的课表" }
         require(payload.meetings.all { it.courseId in courseIds }) { "课表引用了不存在的课程" }
         require(payload.tasks.all { it.courseId == null || it.courseId in courseIds }) { "任务引用了不存在的课程" }
         require(payload.ocrSnapshots.all { it.inboxItemId in inboxIds }) { "OCR 引用了不存在的收件项" }
         require(payload.habitCheckins.all { it.habitId in habitIds }) { "打卡引用了不存在的长期事项" }
+        require(payload.ditingSegments.all { it.sessionId in ditingSessionIds }) { "课堂分段引用了不存在的课堂记录" }
+        require(payload.ditingMarkers.all { it.sessionId in ditingSessionIds }) { "课堂标记引用了不存在的课堂记录" }
+        require(payload.ditingMarkers.all { it.segmentId == null || it.segmentId in ditingSegmentIds }) { "课堂标记引用了不存在的转写分段" }
         require(payload.periods.all { it.periodIndex in 1..30 && it.startMinutes in 0..1439 && it.endMinutes in 1..1440 }) {
             "节次时间无效"
         }
@@ -110,6 +127,8 @@ internal object BackupPayloadValidator {
 class BackupManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dao: CampusDao,
+    private val ditingDao: DitingDao,
+    private val ditingAudioStore: DitingAudioStore,
     private val database: XiangeceDatabase,
     private val settingsStore: AppSettingsStore,
     private val json: Json,
@@ -145,6 +164,11 @@ class BackupManager @Inject constructor(
             reminders = dao.allReminders(),
             habitTemplates = dao.allHabitTemplates(),
             habitCheckins = dao.allHabitCheckins(),
+            ditingSessions = ditingDao.allSessions().map { it.copy(audioDirectory = "", audioPath = "", audioBytes = 0) },
+            ditingSegments = ditingDao.allSessions().flatMap { session ->
+                ditingDao.allSegments(session.id).map { it.copy(audioPath = "") }
+            },
+            ditingMarkers = ditingDao.allMarkers(),
         )
         context.contentResolver.openOutputStream(uri, "wt").use { output ->
             requireNotNull(output) { "无法创建备份文件" }
@@ -215,6 +239,7 @@ class BackupManager @Inject constructor(
                 }
             }
             val oldImagePaths = dao.allInbox().mapNotNull { it.imagePath }
+            val oldDitingSessionIds = ditingDao.allSessions().map { it.id }
             database.withTransaction {
                 dao.clearReminders()
                 dao.clearOcrSnapshots()
@@ -230,6 +255,9 @@ class BackupManager @Inject constructor(
                 dao.clearGradeRules()
                 dao.clearHabitCheckins()
                 dao.clearHabitTemplates()
+                ditingDao.deleteMarkersForBackup()
+                ditingDao.deleteSegmentsForBackup()
+                ditingDao.deleteSessionsForBackup()
                 payload.timetables.forEach { dao.upsertTimetable(it) }
                 dao.upsertCourses(payload.courses)
                 dao.upsertMeetings(payload.meetings)
@@ -244,9 +272,13 @@ class BackupManager @Inject constructor(
                 dao.upsertReminders(payload.reminders)
                 dao.upsertHabitTemplates(payload.habitTemplates)
                 dao.upsertHabitCheckins(payload.habitCheckins)
+                ditingDao.upsertSessions(payload.ditingSessions)
+                ditingDao.upsertSegments(payload.ditingSegments)
+                ditingDao.upsertMarkers(payload.ditingMarkers)
             }
             settingsStore.restore(payload.settings)
             oldImagePaths.forEach { privateInboxFile(it)?.delete() }
+            oldDitingSessionIds.forEach { ditingAudioStore.deleteSessionFiles(it) }
         } catch (error: Throwable) {
             createdImages.forEach(File::delete)
             throw error

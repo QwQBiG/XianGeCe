@@ -75,6 +75,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -100,6 +101,7 @@ import java.time.ZoneId
 import win.iqwqi.xiangece.data.local.HabitCheckinEntity
 import win.iqwqi.xiangece.data.local.HabitTemplateEntity
 import win.iqwqi.xiangece.data.local.CustomQuoteEntity
+import win.iqwqi.xiangece.data.BuiltInQuotes
 import win.iqwqi.xiangece.domain.model.HabitFrequency
 import win.iqwqi.xiangece.ui.AppUiState
 import win.iqwqi.xiangece.ui.HabitStats
@@ -747,19 +749,25 @@ private fun YearlyHeatmapSheet(
                         val date = firstDayOfYear.plusDays(dayOffset.toLong())
                         val count = countByDay[date.toEpochDay()] ?: 0
                         val label = "${date.monthValue}月${date.dayOfMonth}日：${if (count > 0) "完成 $count 项" else "未打卡"}"
+                        val cellTop = 16.dp + (row * 14).dp
+                        val tooltipWidth = 132.dp
+                        val tooltipX = maxOf(0, col * 14 - 44).dp
+                        val tooltipY = if (row >= 3) cellTop - 34.dp else cellTop + 16.dp
                         Box(
                             modifier = Modifier
-                                .padding(top = 4.dp)
+                                .offset(x = tooltipX, y = tooltipY)
                                 .background(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.96f),
                                     RoundedCornerShape(8.dp),
                                 )
                                 .padding(horizontal = 10.dp, vertical = 4.dp),
                         ) {
                             Text(
                                 label,
+                                modifier = Modifier.width(tooltipWidth),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onPrimary,
+                                maxLines = 1,
                             )
                         }
                     }
@@ -1033,28 +1041,7 @@ private fun CelebrateSheet(stats: HabitStats, onDismiss: () -> Unit) {
  * 每日箴言池。相同日期返回相同内容，保证同一天显示一致。
  * 后续用户可以指定替换内容。
  */
-private val dailyQuotes = listOf(
-    "不积跬步，无以至千里；不积小流，无以成江海。",
-    "锲而舍之，朽木不折；锲而不舍，金石可镂。",
-    "千里之行，始于足下。",
-    "天行健，君子以自强不息。",
-    "合抱之木，生于毫末；九层之台，起于累土。",
-    "每日一善，功不唐捐。",
-    "日拱一卒，功不唐捐。",
-    "有志者事竟成。",
-    "业精于勤，荒于嬉。",
-    "博观而约取，厚积而薄发。",
-    "士不可以不弘毅，任重而道远。",
-    "知之者不如好之者，好之者不如乐之者。",
-    "纸上得来终觉浅，绝知此事要躬行。",
-    "千淘万漉虽辛苦，吹尽狂沙始到金。",
-    "宝剑锋从磨砺出，梅花香自苦寒来。",
-    "随风潜入夜，润物细无声。",
-    "读书破万卷，下笔如有神。",
-    "学而不思则罔，思而不学则殆。",
-    "温故而知新，可以为师矣。",
-    "见贤思齐焉，见不贤而内自省也。",
-)
+private val dailyQuotes = BuiltInQuotes.entries.map { it.text }
 
 private fun getDailyQuote(customQuotes: List<CustomQuoteEntity> = emptyList()): String {
     val today = LocalDate.now(ZoneId.systemDefault())

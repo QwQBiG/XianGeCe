@@ -15,6 +15,8 @@ import okhttp3.OkHttpClient
 import win.iqwqi.xiangece.data.local.CampusDao
 import win.iqwqi.xiangece.data.local.ExpenseDao
 import win.iqwqi.xiangece.data.local.XiangeceDatabase
+import win.iqwqi.xiangece.feature.diting.data.DitingDao
+import win.iqwqi.xiangece.data.BuiltInQuotes
 import java.util.concurrent.TimeUnit
 
 @Module
@@ -32,6 +34,10 @@ object AppModule {
             MIGRATION_2_3,
             MIGRATION_3_4,
             XiangeceDatabase.MIGRATION_4_5,
+            XiangeceDatabase.MIGRATION_5_6,
+            XiangeceDatabase.MIGRATION_6_7,
+            XiangeceDatabase.MIGRATION_7_8,
+            XiangeceDatabase.MIGRATION_8_9,
         ).build()
 
     @Provides
@@ -39,6 +45,9 @@ object AppModule {
 
     @Provides
     fun provideExpenseDao(database: XiangeceDatabase): ExpenseDao = database.expenseDao()
+
+    @Provides
+    fun provideDitingDao(database: XiangeceDatabase): DitingDao = database.ditingDao()
 
     private val MIGRATION_1_2 = object : Migration(1, 2) {
         override fun migrate(db: SupportSQLiteDatabase) {
@@ -70,32 +79,10 @@ object AppModule {
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS `custom_quotes` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `text` TEXT NOT NULL, `author` TEXT NOT NULL DEFAULT '', `isBuiltIn` INTEGER NOT NULL DEFAULT 0, `orderIndex` INTEGER NOT NULL DEFAULT 0, `createdAtEpochMillis` INTEGER NOT NULL DEFAULT 0)",
             )
-            val builtIns = listOf(
-                "不积跬步，无以至千里；不积小流，无以成江海。",
-                "锲而舍之，朽木不折；锲而不舍，金石可镂。",
-                "千里之行，始于足下。",
-                "天行健，君子以自强不息。",
-                "合抱之木，生于毫末；九层之台，起于累土。",
-                "每日一善，功不唐捐。",
-                "日拱一卒，功不唐捐。",
-                "有志者事竟成。",
-                "业精于勤，荒于嬉。",
-                "博观而约取，厚积而薄发。",
-                "士不可以不弘毅，任重而道远。",
-                "知之者不如好之者，好之者不如乐之者。",
-                "纸上得来终觉浅，绝知此事要躬行。",
-                "千淘万漉虽辛苦，吹尽狂沙始到金。",
-                "宝剑锋从磨砺出，梅花香自苦寒来。",
-                "随风潜入夜，润物细无声。",
-                "读书破万卷，下笔如有神。",
-                "学而不思则罔，思而不学则殆。",
-                "温故而知新，可以为师矣。",
-                "见贤思齐焉，见不贤而内自省也。",
-            )
-            builtIns.forEachIndexed { index, text ->
+            BuiltInQuotes.entries.forEachIndexed { index, quote ->
                 db.execSQL(
-                    "INSERT INTO `custom_quotes` (`text`, `author`, `isBuiltIn`, `orderIndex`, `createdAtEpochMillis`) VALUES (?, '', 1, ?, ?)",
-                    arrayOf<Any>(text, index, System.currentTimeMillis() + index),
+                    "INSERT INTO `custom_quotes` (`text`, `author`, `isBuiltIn`, `orderIndex`, `createdAtEpochMillis`) VALUES (?, ?, 1, ?, ?)",
+                    arrayOf<Any>(quote.text, quote.author, index, System.currentTimeMillis() + index),
                 )
             }
         }

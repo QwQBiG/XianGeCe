@@ -10,17 +10,22 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
@@ -82,6 +87,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
@@ -143,7 +151,6 @@ fun CoursesScreen(
     onClearWallpaper: () -> Unit,
     onSaveBackgroundOptions: (Float, Boolean) -> Unit,
     /** 当课表已滚到头且用户继续同方向拖时，请求跳转到相邻 Tab（-1=左页，+1=右页）。 */
-    onNavigateAdjacent: (Int) -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -249,15 +256,7 @@ fun CoursesScreen(
                     newCourseDefaults = day to period
                     editing = null to null
                 },
-                onNavigateAdjacent = onNavigateAdjacent,
             )
-            if (activeMeetings.isEmpty()) {
-                EmptyStateCard(
-                    title = "第 $selectedWeek 周还没有课程",
-                    message = "点击课表中的空白格快速添加，也可以从上方导入已有课表。",
-                    icon = Icons.Outlined.CalendarMonth,
-                )
-            }
         } else {
             DaySelector(
                 selectedDay = selectedDay,
@@ -954,6 +953,8 @@ private fun TimetableFaqSheet(onDismiss: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 640.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1358,7 +1359,6 @@ private fun WeeklyTimetableGrid(
     onMeetingClick: (CourseMeetingEntity) -> Unit,
     onMeetingLongClick: (CourseMeetingEntity) -> Unit,
     onEmptyClick: (day: Int, period: Int) -> Unit,
-    onNavigateAdjacent: (Int) -> Unit,
 ) {
     val savedPeriods = periods.associateBy { it.periodIndex }
     val visiblePeriodCount = maxOf(
@@ -1371,10 +1371,9 @@ private fun WeeklyTimetableGrid(
     val coursesById = courses.associateBy { it.id }
     // The period axis stays fixed while the seven-day grid scrolls horizontally.
     val rowHeight = rowHeightDp.coerceIn(44, 220).dp
-    val dayWidth = dayWidthDp.coerceIn(38, 180).dp
+    val preferredDayWidth = dayWidthDp.coerceIn(38, 180).dp
     val axisWidth = 34.dp
     val headerHeight = 30.dp
-    val compactColumns = dayWidthDp <= 46
     val weekDates = (0..6).map { weekStartDate.plusDays(it.toLong()) }
     val gridScroll = rememberScrollState()
     val verticalScroll = rememberScrollState()
@@ -1384,23 +1383,81 @@ private fun WeeklyTimetableGrid(
             ?.let { runCatching { BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
     }
 
-    val gridShape = RoundedCornerShape(14.dp)
-    Card(
-        // The grid used to round only its top edge, leaving a rectangular
-        // surface behind the empty-state card at the bottom.
-        modifier = modifier.fillMaxWidth().clip(gridShape),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
-        ),
-        shape = gridShape,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(verticalScroll)
-                .padding(start = 0.dp, top = 5.dp, end = 0.dp, bottom = 0.dp),
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val horizontalScrollable = maxWidth < axisWidth + preferredDayWidth * 7
+        val dayWidth = if (horizontalScrollable) {
+            preferredDayWidth
+        } else {
+            ((maxWidth - axisWidth) / 7f).coerceIn(preferredDayWidth, 180.dp)
+        }
+        val compactColumns = dayWidth < 46.dp
+        val gestureBoundary = remember(horizontalScrollable) {
+            object : NestedScrollConnection {
+                override fun onPreScroll(
+                    available: Offset,
+                    source: NestedScrollSource,
+                ): Offset {
+                    // 课表横向溢出时，横向手势在这里开始；纵向位移不交给纵向滚动。
+                    return if (
+                        horizontalScrollable &&
+                        source == NestedScrollSource.UserInput &&
+                        kotlin.math.abs(available.x) > kotlin.math.abs(available.y) + 1f
+                    ) {
+                        Offset(0f, available.y)
+                    } else {
+                        Offset.Zero
+                    }
+                }
+
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource,
+                ): Offset {
+                    // 课表已滑到最左/右边时也不把剩余横向手势传给主页面，
+                    // 避免出现“拖课表却突然翻页”的卡顿和跳页。
+                    return if (
+                        horizontalScrollable &&
+                        source == NestedScrollSource.UserInput &&
+                        kotlin.math.abs(available.x) > kotlin.math.abs(available.y) + 1f
+                    ) {
+                        Offset(available.x, 0f)
+                    } else {
+                        Offset.Zero
+                    }
+                }
+            }
+        }
+        val axisDragState = androidx.compose.foundation.gestures.rememberDraggableState { delta ->
+            gridScroll.dispatchRawDelta(-delta)
+        }
+        val gridShape = RoundedCornerShape(14.dp)
+        Card(
+            modifier = Modifier.fillMaxSize().clip(gridShape),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+            ),
+            shape = gridShape,
         ) {
-            Column(modifier = Modifier.width(axisWidth)) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(gestureBoundary)
+                    .verticalScroll(verticalScroll)
+                    .padding(start = 0.dp, top = 5.dp, end = 0.dp, bottom = 0.dp),
+            ) {
+            Column(
+                modifier = Modifier
+                    .width(axisWidth)
+                    .then(
+                        if (horizontalScrollable) {
+                            Modifier.draggable(axisDragState, Orientation.Horizontal)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
                 Box(
                     modifier = Modifier.height(headerHeight),
                     contentAlignment = Alignment.Center,
@@ -1456,7 +1513,9 @@ private fun WeeklyTimetableGrid(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .horizontalScroll(gridScroll),
+                    .then(
+                        if (horizontalScrollable) Modifier.horizontalScroll(gridScroll) else Modifier,
+                    ),
             ) {
                 Row {
                     weekdays.forEachIndexed { index, day ->
@@ -1637,10 +1696,11 @@ private fun WeeklyTimetableGrid(
                         }
                 }
             }
+            }
         }
     }
 }
-
+}
 @Composable
 private fun GridHeaderCell(label: String, width: Int) {
     Box(

@@ -6,6 +6,8 @@ plugins {
     alias(libs.plugins.serialization)
 }
 
+
+
 android {
     namespace = "win.iqwqi.xiangece"
     compileSdk = 37
@@ -14,11 +16,15 @@ android {
         applicationId = "win.iqwqi.xiangece"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        versionCode = 2
         versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
@@ -52,6 +58,8 @@ android {
         buildConfig = true
     }
 
+
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -59,6 +67,7 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        jniLibs.pickFirsts += "**/libonnxruntime.so"
     }
 
     testOptions {
@@ -103,6 +112,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.pdfbox.android)
     implementation(libs.accompanist.swiperefresh)
+    implementation(libs.onnxruntime.android)
+    implementation(files("libs/opencv-4.10.0.aar"))
+    implementation(files("libs/sherpa-onnx-1.13.4-no-ort.aar"))
 
     testImplementation(libs.junit)
     testImplementation(libs.androidx.room.testing)
