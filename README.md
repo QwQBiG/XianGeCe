@@ -1,8 +1,3 @@
-InvalidOperation: 
-Line |
-   4 |  [Console]::ErrorEncoding = [System.Text.UTF8Encoding]::new($false)
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | The property 'ErrorEncoding' cannot be found on this object. Verify that the property exists and can be set.
 # 弦歌册 XIANGECE
 
 <p align="center">
