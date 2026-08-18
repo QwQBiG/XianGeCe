@@ -84,6 +84,11 @@ class MainActivity : ComponentActivity() {
                         backupLauncher.launch("弦歌册-更新前备份-${System.currentTimeMillis()}")
                     },
                     onRetry = ::downloadAndInstall,
+                    onOpenWebUrl = { url ->
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                    },
                     onDismiss = { updateState = AppUpdateState.Idle },
                 )
             }

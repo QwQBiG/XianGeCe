@@ -84,6 +84,8 @@
 
 ## 下载
 
+### 方式一：GitHub Releases（推荐，有梯子）
+
 <p>
   <a href="https://github.com/QwQBiG/XianGeCe/releases/latest">
     <img alt="Get it on GitHub" src="https://img.shields.io/badge/GitHub_Releases-181717?style=for-the-badge&logo=github&logoColor=white" />
@@ -92,6 +94,13 @@
     <img alt="Download APK" src="https://img.shields.io/badge/%E7%9B%B4%E6%8E%A5%E4%B8%8B%E8%BD%BD%E6%9C%80%E6%96%B0%E7%89%88APK-009688?style=for-the-badge&logo=android&logoColor=white" />
   </a>
 </p>
+
+### 方式二：国内网盘（无梯子，国内速度快）
+
+- **夸克网盘**：<https://pan.quark.cn/s/edc1876d6a89>
+- **百度网盘**：<https://pan.baidu.com/s/1mVtkpbJvv5ZmWg0VcCHFMA> 提取码：`ydWI`
+
+手机扫码或打开链接，下载 APK 后覆盖安装即可。
 
 ## 功能概览
 

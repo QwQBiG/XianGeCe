@@ -15,6 +15,13 @@ import okhttp3.Request
 import win.iqwqi.xiangece.BuildConfig
 
 @Serializable
+data class WebDownloadSource(
+    val name: String = "",
+    val url: String = "",
+    val extra: String = "",
+)
+
+@Serializable
 data class AppUpdateManifest(
     val versionCode: Int = 0,
     val versionName: String = "",
@@ -24,7 +31,20 @@ data class AppUpdateManifest(
     val sha256: String = "",
     val releaseNotes: String = "",
     val downloadPageUrl: String = "https://github.com/QwQBiG/XianGeCe/releases/latest",
-)
+    val webUrl: String = "",
+    val webSources: List<WebDownloadSource> = emptyList(),
+) {
+    val allWebSources: List<WebDownloadSource>
+        get() = buildList {
+            addAll(webSources)
+            if (webUrl.isNotBlank() && webSources.none { it.url == webUrl }) {
+                add(WebDownloadSource(name = "网盘下载", url = webUrl))
+            }
+            if (downloadPageUrl.isNotBlank()) {
+                add(WebDownloadSource(name = "GitHub Releases", url = downloadPageUrl))
+            }
+        }
+}
 
 sealed interface AppUpdateState {
     data object Idle : AppUpdateState

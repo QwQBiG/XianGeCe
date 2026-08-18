@@ -15,11 +15,16 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import win.iqwqi.xiangece.core.update.AppUpdateManifest
 import win.iqwqi.xiangece.core.update.AppUpdateState
+import win.iqwqi.xiangece.core.update.WebDownloadSource
 
 @Composable
 fun AppUpdateDialog(
@@ -27,6 +32,7 @@ fun AppUpdateDialog(
     onUpdate: (AppUpdateManifest) -> Unit,
     onBackupAndUpdate: (AppUpdateManifest) -> Unit,
     onRetry: (AppUpdateManifest) -> Unit,
+    onOpenWebUrl: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val manifest = when (state) {
@@ -37,6 +43,72 @@ fun AppUpdateDialog(
         else -> return
     }
     val mandatory = manifest.mandatory
+    val allSources = manifest.allWebSources
+    var showPicker by remember { mutableStateOf<WebDownloadSource?>(null) }
+
+    if (showPicker != null) {
+        val picked = showPicker!!
+        Dialog(
+            onDismissRequest = { showPicker = null },
+            properties = DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true,
+            ),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "浏览器打开下载页",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        picked.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(picked.url, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (picked.extra.isNotBlank()) {
+                        Text(
+                            "提取码：${picked.extra}",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Text(
+                        "点击下方按钮，系统会用默认浏览器打开该链接，请手动下载并覆盖安装。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { showPicker = null },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("取消") }
+                        Button(
+                            onClick = {
+                                val url = picked.url
+                                showPicker = null
+                                onOpenWebUrl(url)
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("打开") }
+                    }
+                }
+            }
+        }
+    }
+
     Dialog(
         onDismissRequest = { if (!mandatory) onDismiss() },
         properties = DialogProperties(
@@ -114,6 +186,24 @@ fun AppUpdateDialog(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(if (state is AppUpdateState.Failed) "重新下载更新" else "立即更新")
+                    }
+                    if (allSources.isNotEmpty()) {
+                        if (allSources.size == 1) {
+                            val s = allSources.first()
+                            val label = buildString {
+                                append(s.name.ifBlank { "浏览器打开下载" })
+                                if (s.extra.isNotBlank()) append("（提取码：${s.extra}）")
+                            }
+                            OutlinedButton(
+                                onClick = { onOpenWebUrl(s.url) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(label) }
+                        } else {
+                            OutlinedButton(
+                                onClick = { showPicker = allSources.first() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("浏览器打开网盘下载（${allSources.size} 个源）") }
+                        }
                     }
                     if (!mandatory) {
                         OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("稍后再说") }

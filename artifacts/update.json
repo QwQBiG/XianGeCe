@@ -1,0 +1,22 @@
+{
+  "versionCode": 2,
+  "versionName": "0.0.1",
+  "mandatory": false,
+  "minSupportedVersionCode": 1,
+  "apkUrl": "https://github.com/QwQBiG/XianGeCe/releases/download/v0.0.1/xiangece-0.0.1.apk",
+  "sha256": "EEE6A98FE8A19F32B264217C65461FCC41ED1E4714BF546CA9B68F693D1416FA",
+  "releaseNotes": "弦歌册 0.0.1 首个发布版本：包含今日、课程、收件、谛听、百宝、厚积、我的七个模块；支持课表 HTML/PDF/Excel/口令/图片 5 种导入；谛听支持中文/英文双语离线转写；备份与恢复；5 套主题色 + 暗色模式；通知提醒；3 种桌面小部件。",
+  "downloadPageUrl": "https://github.com/QwQBiG/XianGeCe/releases/latest",
+  "webSources": [
+    {
+      "name": "夸克网盘",
+      "url": "https://pan.quark.cn/s/edc1876d6a89",
+      "extra": ""
+    },
+    {
+      "name": "百度网盘",
+      "url": "https://pan.baidu.com/s/1mVtkpbJvv5ZmWg0VcCHFMA?pwd=ydWI",
+      "extra": "ydWI"
+    }
+  ]
+}
