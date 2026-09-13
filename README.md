@@ -1,5 +1,11 @@
 # 弦歌册 XIANGECE
 
+## 新版开发说明
+
+弦歌册新版采用闭源、私有开发方式。当前开发和受邀体验版本维护在 [XianGeCe-Private](https://github.com/QwQBiG/XianGeCe-Private)，仅获授权的账号可访问；没有访问权限时，GitHub 可能显示 404。
+
+本仓库保留历史公开版本及原有许可。新版源码、角色素材和测试安装包不在此发布；下方的功能、下载及构建说明对应历史公开版本。
+
 <p align="center">
   <a href="https://github.com/QwQBiG/XianGeCe/releases/latest">
     <img alt="Version" src="https://img.shields.io/badge/version-0.0.1-blue?style=flat-square" />
