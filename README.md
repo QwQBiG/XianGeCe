@@ -1,10 +1,10 @@
 # 弦歌册 XIANGECE
 
-## 新版开发说明
+## 历史版已停止维护
 
-弦歌册新版采用闭源、私有开发方式。当前开发和受邀体验版本维护在 [XianGeCe-Private](https://github.com/QwQBiG/XianGeCe-Private)，仅获授权的账号可访问；没有访问权限时，GitHub 可能显示 404。
+本仓库保留弦歌册 0.0.1 的源码和构建说明，已停止维护。历史版本继续适用 [GPL-3.0](LICENSE)，安装包和校验文件仍可从 [原版 Release](https://github.com/QwQBiG/XianGeCe/releases/tag/v0.0.1) 下载。
 
-本仓库保留历史公开版本及原有许可。新版源码、角色素材和测试安装包不在此发布；下方的功能、下载及构建说明对应历史公开版本。
+后续开发请前往 [弦歌册新版](https://github.com/QwQBiG/XianGeCe-Next)。
 
 <p align="center">
   <a href="https://github.com/QwQBiG/XianGeCe/releases/latest">
