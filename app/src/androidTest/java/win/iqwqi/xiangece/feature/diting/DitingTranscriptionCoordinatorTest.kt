@@ -27,6 +27,7 @@ import win.iqwqi.xiangece.feature.diting.transcription.DitingTranscriptionCoordi
 class DitingTranscriptionCoordinatorTest {
     private lateinit var database: XiangeceDatabase
     private lateinit var coordinator: DitingTranscriptionCoordinator
+    private lateinit var repository: DitingRepository
 
     @Before
     fun createCoordinator() {
@@ -34,15 +35,53 @@ class DitingTranscriptionCoordinatorTest {
         database = Room.inMemoryDatabaseBuilder(context, XiangeceDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        coordinator = DitingTranscriptionCoordinator(
-            DitingRepository(database.ditingDao(), database, DitingAudioStore(context)),
-            DitingSignalAnalyzer(),
-        )
+        repository = DitingRepository(database.ditingDao(), database, DitingAudioStore(context))
+        coordinator = DitingTranscriptionCoordinator(repository, DitingSignalAnalyzer())
     }
 
     @After
     fun closeDatabase() {
         database.close()
+    }
+
+    @Test
+    fun editsInvalidateLaterSemanticContextButKeepManualMarkersAndRawText() = runTest {
+        val dao = database.ditingDao()
+        val sessionId = repository.createSession("上下文核对")
+        val segments = (0..7).map { sequence ->
+            val value = DitingSegmentEntity(sessionId = sessionId, sequence = sequence,
+                startMillis = sequence * 8000L, endMillis = (sequence + 1) * 8000L,
+                text = "考试范围第${sequence}章", rawText = "考试范围第${sequence}章", isFinal = true, status = "completed")
+            value.copy(id = dao.upsertSegment(value))
+        }
+        val last = segments.last()
+        val automatic = DitingMarkerEntity(sessionId = sessionId, segmentId = last.id,
+            positionMillis = last.endMillis, type = DitingMarkerType.AUTO_HIGHLIGHT.key,
+            title = "范围", source = "ai")
+        val expected = segments.associate { it.sequence to it.text }
+        assertTrue(repository.storeAutomaticMarker(automatic, expected, last.text))
+        val manualId = dao.upsertMarker(automatic.copy(id = 0, source = "manual", title = "我的重点"))
+        repository.updateSegmentText(segments.first(), "第一章不在考试范围")
+        assertEquals(listOf(manualId), dao.markersBySession(sessionId).map { it.id })
+        assertEquals("考试范围第0章", dao.segmentBySequence(sessionId, 0)?.rawText)
+        assertEquals(false, repository.storeAutomaticMarker(automatic, expected, last.text))
+        repository.updateSegmentTranscript(sessionId, 0, "延迟到达的旧结果", "延迟到达的旧结果", true, null, "zh", "completed")
+        assertEquals("第一章不在考试范围", dao.segmentBySequence(sessionId, 0)?.text)
+    }
+
+    @Test
+    fun savedQueueIgnoresCompletedRowsAndReturnsOldestPending() = runTest {
+        val dao = database.ditingDao()
+        val sessionId = repository.createSession("队列核对")
+        for (sequence in listOf(3, 1, 2)) {
+            dao.upsertSegment(DitingSegmentEntity(sessionId = sessionId, sequence = sequence,
+                startMillis = sequence * 8000L, endMillis = (sequence + 1) * 8000L,
+                isFinal = sequence == 1, status = if (sequence == 1) "completed" else "waiting_for_transcription"))
+        }
+        assertEquals(2, repository.awaitingTranscriptionCount(sessionId))
+        assertEquals(2, repository.nextAwaitingTranscription(sessionId)?.sequence)
+        repository.markSegmentAudioOnly(sessionId, 2)
+        assertEquals(3, repository.nextAwaitingTranscription(sessionId)?.sequence)
     }
 
     @Test

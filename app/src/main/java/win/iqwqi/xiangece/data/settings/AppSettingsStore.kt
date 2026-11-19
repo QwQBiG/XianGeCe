@@ -1,6 +1,7 @@
 package win.iqwqi.xiangece.data.settings
 
 import android.content.Context
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -16,6 +17,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.settingsDataStore by preferencesDataStore("xiangece_settings")
 
@@ -28,6 +31,7 @@ data class AppSettings(
     val darkMode: Boolean = false,
     val followSystemTheme: Boolean = false,
     val themeSeed: String = "pine",
+    val companion: CompanionAppearance = CompanionAppearance(),
     val courseReminderMinutes: Int = 30,
     val taskReminderHoursFirst: Int = 24,
     val taskReminderHoursSecond: Int = 2,
@@ -57,14 +61,18 @@ data class AppSettings(
 )
 
 @Singleton
-class AppSettingsStore @Inject constructor(
-    @ApplicationContext private val context: Context,
+class AppSettingsStore internal constructor(
+    private val dataStore: DataStore<Preferences>,
 ) {
+    @Inject
+    constructor(@ApplicationContext context: Context) : this(context.settingsDataStore)
+
     private object Keys {
         val onboarding = booleanPreferencesKey("onboarding")
         val darkMode = booleanPreferencesKey("dark_mode")
         val followSystemTheme = booleanPreferencesKey("follow_system_theme")
         val themeSeed = stringPreferencesKey("theme_seed")
+        val companion = stringPreferencesKey("companion_appearance")
         val courseReminder = intPreferencesKey("course_reminder")
         val taskReminderFirst = intPreferencesKey("task_reminder_first")
         val taskReminderSecond = intPreferencesKey("task_reminder_second")
@@ -108,6 +116,7 @@ class AppSettingsStore @Inject constructor(
      *   }
      */
     private val MIGRATIONS: Map<Int, (Preferences) -> Preferences> = emptyMap()
+    private val appearanceJson = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
     private suspend fun runMigrationsIfNeeded(current: Preferences): Preferences {
         val storedVersion = current[Keys.schemaVersion] ?: 0
@@ -117,11 +126,11 @@ class AppSettingsStore @Inject constructor(
             prefs = MIGRATIONS[version]?.invoke(prefs) ?: prefs
         }
         // 写入新版本号
-        context.settingsDataStore.edit { it[Keys.schemaVersion] = SETTINGS_SCHEMA_VERSION }
+        dataStore.edit { it[Keys.schemaVersion] = SETTINGS_SCHEMA_VERSION }
         return prefs
     }
 
-    val settings: Flow<AppSettings> = context.settingsDataStore.data
+    val settings: Flow<AppSettings> = dataStore.data
         .catch { emit(emptyPreferences()) }
         .map { prefs ->
             val migrated = runMigrationsIfNeeded(prefs)
@@ -130,6 +139,7 @@ class AppSettingsStore @Inject constructor(
                 darkMode = migrated[Keys.darkMode] ?: false,
                 followSystemTheme = migrated[Keys.followSystemTheme] ?: false,
                 themeSeed = migrated[Keys.themeSeed] ?: "pine",
+                companion = decodeAppearance(migrated[Keys.companion]),
                 courseReminderMinutes = migrated[Keys.courseReminder] ?: 30,
                 taskReminderHoursFirst = migrated[Keys.taskReminderFirst] ?: 24,
                 taskReminderHoursSecond = migrated[Keys.taskReminderSecond] ?: 2,
@@ -169,7 +179,7 @@ class AppSettingsStore @Inject constructor(
         taskReminderHoursSecond: Int? = null,
         notificationPermissionAsked: Boolean? = null,
     ) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             onboardingComplete?.let { prefs[Keys.onboarding] = it }
             darkMode?.let { prefs[Keys.darkMode] = it }
             followSystemTheme?.let { prefs[Keys.followSystemTheme] = it }
@@ -181,13 +191,24 @@ class AppSettingsStore @Inject constructor(
     }
 
     suspend fun updateThemeSeed(themeSeed: String) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.themeSeed] = themeSeed
+            prefs[Keys.companion] = appearanceJson.encodeToString(
+                decodeAppearance(prefs[Keys.companion]).copy(palette = CompanionPalette.CUSTOM),
+            )
         }
     }
 
+    private fun decodeAppearance(value: String?): CompanionAppearance =
+        value?.let { runCatching { appearanceJson.decodeFromString<CompanionAppearance>(it) }.getOrNull() }
+            ?: CompanionAppearance()
+
+    suspend fun updateCompanion(value: CompanionAppearance) {
+        dataStore.edit { it[Keys.companion] = appearanceJson.encodeToString(value) }
+    }
+
     suspend fun saveAccount(email: String, encryptedPassword: String) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.accountEmail] = email
             prefs[Keys.accountPassword] = encryptedPassword
             prefs[Keys.accountLoggedIn] = true
@@ -195,13 +216,13 @@ class AppSettingsStore @Inject constructor(
     }
 
     suspend fun setAccountLoggedIn(loggedIn: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.accountLoggedIn] = loggedIn
         }
     }
 
     suspend fun clearAccount() {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs.remove(Keys.accountEmail)
             prefs.remove(Keys.accountPassword)
             prefs[Keys.accountLoggedIn] = false
@@ -218,7 +239,7 @@ class AppSettingsStore @Inject constructor(
         supportsVision: Boolean,
         encryptedApiKey: String,
     ) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.aiEnabled] = enabled
             prefs[Keys.aiProvider] = provider.trim().ifBlank { "自定义" }
             prefs[Keys.aiBaseUrl] = baseUrl.trim().trimEnd('/')
@@ -231,27 +252,27 @@ class AppSettingsStore @Inject constructor(
     }
 
     suspend fun updateDitingTranscription(model: String, endpoint: String) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.ditingTranscriptionModel] = model.trim().ifBlank { "whisper-1" }
             prefs[Keys.ditingTranscriptionEndpoint] = endpoint.trim().trimEnd('/' )
         }
     }
 
     suspend fun updateDitingAiAnnotationEnabled(enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.ditingAiAnnotationEnabled] = enabled
         }
     }
 
     suspend fun updateGradePreferences(scheme: String, customRules: String) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.gradeScheme] = scheme.takeIf { it in setOf("4.0", "4.3", "5.0", "自定义") } ?: "4.0"
             prefs[Keys.customGradeRules] = customRules.take(2_000)
         }
     }
 
     suspend fun updateTimetableLayout(columnWidthDp: Int, rowHeightDp: Int, periodCount: Int) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.timetableColumnWidth] = columnWidthDp.coerceIn(38, 180)
             prefs[Keys.timetableRowHeight] = rowHeightDp.coerceIn(44, 220)
             prefs[Keys.timetablePeriodCount] = periodCount.coerceIn(6, 24)
@@ -259,22 +280,25 @@ class AppSettingsStore @Inject constructor(
     }
 
     suspend fun updateTimetableWallpaper(path: String) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.timetableWallpaperPath] = path
         }
     }
 
     suspend fun updateTimetableBackgroundOptions(alpha: Float, showEmptyCellsAlways: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.timetableWallpaperAlpha] = alpha.coerceIn(0f, 1f)
             prefs[Keys.timetableShowEmptyCellsAlways] = showEmptyCellsAlways
         }
     }
 
     suspend fun restore(value: AppSettings) {
+        updateThemeSeed(value.themeSeed)
+        updateCompanion(value.companion)
         updateGeneral(
             onboardingComplete = value.onboardingComplete,
             darkMode = value.darkMode,
+            followSystemTheme = value.followSystemTheme,
             courseReminderMinutes = value.courseReminderMinutes,
             taskReminderHoursFirst = value.taskReminderHoursFirst,
             taskReminderHoursSecond = value.taskReminderHoursSecond,

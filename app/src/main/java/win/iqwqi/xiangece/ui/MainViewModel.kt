@@ -57,6 +57,11 @@ import win.iqwqi.xiangece.data.local.TaskEntity
 import win.iqwqi.xiangece.data.local.TimetableEntity
 import win.iqwqi.xiangece.data.settings.AppSettings
 import win.iqwqi.xiangece.data.settings.AppSettingsStore
+import win.iqwqi.xiangece.data.settings.CompanionAppearance
+import win.iqwqi.xiangece.ui.companion.CompanionCue
+import win.iqwqi.xiangece.ui.companion.CompanionEvent
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.map
 import win.iqwqi.xiangece.domain.model.DraftType
 import win.iqwqi.xiangece.domain.model.HabitFrequency
 import win.iqwqi.xiangece.domain.model.ParsedDraft
@@ -82,9 +87,12 @@ data class DraftEditorState(
     val startPeriodText: String = draft.startPeriod?.toString().orEmpty(),
     val endPeriodText: String = draft.endPeriod?.toString().orEmpty(),
     val ambiguitiesAcknowledged: Boolean = draft.ambiguities.isEmpty(),
+    val sourceImagePath: String? = null,
+    val remainingDraftCount: Int = 0,
 )
 
 data class AppUiState(
+    val dataReady: Boolean = false,
     val semester: SemesterEntity? = null,
     val periods: List<PeriodTemplateEntity> = emptyList(),
     val courses: List<CourseEntity> = emptyList(),
@@ -142,6 +150,7 @@ data class TimetableEditorState(
     val sourceText: String,
     val rows: List<TimetableRowState>,
     val sourceLabel: String = "课表导入",
+    val sourceImagePath: String? = null,
 )
 
 @Serializable
@@ -208,11 +217,31 @@ class MainViewModel @Inject constructor(
     private val offlineOcrService: OfflineOcrService,
 ) : ViewModel() {
     private val editor = MutableStateFlow<DraftEditorState?>(null)
+    private val pendingDailyDrafts = ArrayDeque<DraftEditorState>()
     private val timetableEditor = MutableStateFlow<TimetableEditorState?>(null)
     private val working = MutableStateFlow(false)
     private val lastCelebratedEpochDay = MutableStateFlow(-1L)
     private val celebrationDismissedEpochDay = MutableStateFlow(-1L)
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val companionEvents = MutableSharedFlow<CompanionEvent>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val companionPaused = ditingRepository.sessions.map { sessions ->
+        sessions.any { it.status in setOf("recording", "paused") }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun greetCompanion() {
+        companionEvents.tryEmit(CompanionEvent(CompanionCue.HELLO, page = 0))
+    }
+
+    fun saveCompanion(value: CompanionAppearance) {
+        viewModelScope.launch {
+            runCatching { settingsStore.updateCompanion(value) }
+                .onSuccess { companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED)) }
+                .onFailure {
+                    if (it is kotlinx.coroutines.CancellationException) throw it
+                    messages.emit("装扮未能保存，请重试")
+                }
+        }
+    }
 
     /** 待撤销动作：删除后弹出带「撤销」按钮的 Snackbar，点击执行 [onUndo] 恢复。 */
     val pendingUndo = MutableStateFlow<PendingUndo?>(null)
@@ -278,6 +307,7 @@ class MainViewModel @Inject constructor(
         working,
     ) { coreData, auxData, currentEditor, currentTimetable, isWorking ->
         AppUiState(
+            dataReady = true,
             semester = coreData.semester,
             periods = coreData.periods,
             courses = coreData.courses,
@@ -332,34 +362,107 @@ class MainViewModel @Inject constructor(
         importer.fromIntent(intent)?.let(::handleSharedInput)
     }
 
-    fun importImage(uri: Uri) = handleSharedInput(SharedInput.Image(uri))
+    fun importImage(uri: Uri, authorizedCloudEndpoint: String? = null) {
+        viewModelScope.launch {
+            withWorking {
+                val file = importer.copyToPrivateStorage(uri)
+                val id = repository.createImageInbox(file.absolutePath)
+                val settings = settingsStore.settings.first()
+                val cloudAllowed = authorizedCloudEndpoint != null && authorizedCloudEndpoint == settings.aiBaseUrl && settings.aiEnabled
+                if (cloudAllowed && aiEnhancer.supportsImageInput(settings)) {
+                    val cloud = aiEnhancer.extractDailyImage(file, settings, authorizedCloudEndpoint!!)
+                    if (cloud.isSuccess) {
+                        presentDailyExtraction(id, cloud.getOrThrow(), file.absolutePath)
+                        messages.emit("云端已整理成待确认事项，请对照原图核对")
+                        return@withWorking
+                    }
+                    messages.emit("云端图片整理未完成，尝试本机识别")
+                }
+                if (!offlineOcrService.isReady()) {
+                    repository.failOcr(id, "原图已保存；请配置云端视觉服务，或安装一个离线 OCR 包后重试")
+                    messages.emit("原图已保留，当前没有可用的图片识别服务")
+                    return@withWorking
+                }
+                if (recognizeInboxImage(file, id) && cloudAllowed && !aiEnhancer.supportsImageInput(settings)) {
+                    val current = editor.value
+                    val source = repository.inboxById(id)?.ocrText.orEmpty()
+                    aiEnhancer.extractDailyText(source, settings)
+                        .onSuccess { if (editor.value === current) presentDailyExtraction(id, it, file.absolutePath) }
+                        .onFailure { messages.emit("云端整理未完成，已保留本机草稿") }
+                }
+            }
+        }
+    }
 
-    fun importTimetableImage(uri: Uri) {
+    private suspend fun presentDailyExtraction(
+        firstInboxId: Long,
+        result: win.iqwqi.xiangece.core.ai.DailyExtraction,
+        imagePath: String? = null,
+    ) {
+        pendingDailyDrafts.clear()
+        result.drafts.forEachIndexed { index, draft ->
+            val inboxId = if (index == 0) firstInboxId else if (imagePath != null) {
+                repository.createImageInbox(imagePath)
+            } else repository.createTextInbox(result.sourceText, "daily_extraction")
+            repository.saveReparsedDraft(inboxId, result.sourceText, draft)
+            pendingDailyDrafts.addLast(DraftEditorState(
+                inboxId = inboxId, sourceText = result.sourceText, draft = draft,
+                sourceImagePath = imagePath, remainingDraftCount = result.drafts.lastIndex - index,
+            ))
+        }
+        editor.value = pendingDailyDrafts.removeFirstOrNull()
+    }
+
+    fun selectOcrPack(id: String) {
+        viewModelScope.launch {
+            offlineOcrService.release()
+            if (!offlineOcrPackManager.selectPack(id)) messages.emit("资源处理中，请完成或暂停后再切换")
+        }
+    }
+
+    fun selectDitingPack(id: String) {
+        viewModelScope.launch {
+            if (ditingRepository.hasActiveSession()) {
+                messages.emit("录音结束后再切换离线识别包")
+                return@launch
+            }
+            ditingOfflineTranscriber.release()
+            if (!ditingOfflinePackManager.selectPack(id)) messages.emit("资源处理中，请完成或暂停后再切换")
+        }
+    }
+
+    // authorizedCloudEndpoint comes only from XiangeceRoot's per-image destination confirmation.
+    fun importTimetableImage(uri: Uri, authorizedCloudEndpoint: String? = null) {
         viewModelScope.launch {
             withWorking {
                 val file = importer.copyToPrivateStorage(uri)
                 val id = repository.createImageInbox(file.absolutePath)
                 val endWeek = repository.currentSemester()?.weekCount ?: 20
                 val maxPeriods = repository.allPeriods().maxOfOrNull { it.periodIndex } ?: 16
-                if (offlineOcrService.isReady()) {
+                val settings = settingsStore.settings.first()
+                val useCloud = authorizedCloudEndpoint != null && authorizedCloudEndpoint == settings.aiBaseUrl && aiEnhancer.supportsImageInput(settings)
+                if (!useCloud) {
                     recognizeTimetableImageOffline(file, id, endWeek, maxPeriods)
                 } else {
-                    val settings = settingsStore.settings.first()
                     aiEnhancer.recognizeTimetableImage(file, settings, maxPeriods, endWeek)
-                        .onSuccess { content ->
+                        .mapCatching { content ->
                             val candidates = parseAiTimetable(content, endWeek, maxPeriods)
-                            if (candidates.isEmpty()) {
-                                repository.failOcr(id, "AI 没有返回可导入课程，请换 HTML/PDF/Excel 或重新截图")
-                                messages.emit("AI 没有返回可导入课程")
-                            } else {
-                                repository.finishOcr(id, content)
-                                openTimetableEditor(id, content, candidates, endWeek, "AI 截图识别")
-                                messages.emit("AI 识别出 " + candidates.size + " 个上课时段，请核对")
-                            }
+                            require(candidates.isNotEmpty()) { "云端没有返回可导入课程，原图已保留" }
+                            content to candidates
+                        }
+                        .onSuccess { (content, candidates) ->
+                            repository.finishOcr(id, content)
+                            openTimetableEditor(id, content, candidates, endWeek, "云端截图识别", file.absolutePath)
+                            messages.emit("识别出 " + candidates.size + " 个上课时段，请核对")
                         }
                         .onFailure {
-                            repository.failOcr(id, it.message ?: "AI 截图识别失败")
-                            messages.emit(it.message ?: "AI 截图识别失败")
+                            if (offlineOcrService.isReady()) {
+                                messages.emit("云端未完成，尝试本机识别")
+                                recognizeTimetableImageOffline(file, id, endWeek, maxPeriods)
+                            } else {
+                                repository.failOcr(id, it.message ?: "截图识别失败，原图已保留")
+                                messages.emit(it.message ?: "截图识别失败，原图已保留")
+                            }
                         }
                 }
             }
@@ -426,11 +529,11 @@ class MainViewModel @Inject constructor(
                     timetableImageParser.parse(result.page, endWeek, maxPeriods)
                 }
                 if (candidates.isEmpty()) {
-                    repository.failOcr(inboxId, "本机 OCR 已识别文字，但没有定位出课程格子；可改用 AI 或导入 PDF/Excel")
+                    repository.failOcr(inboxId, "本机已识别文字，但没有定位出课程格子；可改用云端截图识别或导入 PDF/Excel")
                     messages.emit("本机 OCR 未定位出课程，请换一张包含完整表头的课表截图")
                 } else {
                     repository.finishOcr(inboxId, result.page.text)
-                    openTimetableEditor(inboxId, result.page.text, candidates, endWeek, "免费中文离线 OCR")
+                    openTimetableEditor(inboxId, result.page.text, candidates, endWeek, "本机 OCR", file.absolutePath)
                     messages.emit("本机 OCR 识别出 " + candidates.size + " 个上课时段，请核对")
                 }
             }
@@ -488,7 +591,7 @@ class MainViewModel @Inject constructor(
                         else -> error("未知的课表导入格式")
                     }
                     require(candidates.isNotEmpty()) {
-                        if (format.startsWith("pdf_")) "未从 PDF 中识别到可确认的课程。请确认选择了对应版式；扫描件没有文字层时可改用 AI 图片转日程。"
+                        if (format.startsWith("pdf_")) "未从 PDF 中识别到可确认的课程。请确认选择了对应版式；扫描件可以保存为图片，再用课表的图片识别入口导入。"
                         else "文件中没有识别到可导入的课程表格"
                     }
                     val id = repository.createTextInbox(sourceText.take(100_000), "timetable_$format")
@@ -534,11 +637,13 @@ class MainViewModel @Inject constructor(
         candidates: List<TimetableCandidate>,
         endWeek: Int,
         sourceLabel: String,
+        sourceImagePath: String? = null,
     ) {
         timetableEditor.value = TimetableEditorState(
             inboxId = inboxId,
             sourceText = sourceText,
             sourceLabel = sourceLabel,
+            sourceImagePath = sourceImagePath,
             rows = candidates.map {
                 TimetableRowState(
                     name = it.name,
@@ -598,39 +703,18 @@ class MainViewModel @Inject constructor(
                 }
                 val settings = settingsStore.settings.first()
                 if (!settings.aiEnabled) {
-                    messages.emit("已生成本地草稿；AI 未启用")
+                    messages.emit("已生成本地草稿；联网服务未启用")
                     return@withWorking
                 }
-                val semester = repository.currentSemester()
-                val context = semester?.let {
-                    "${it.name}，开始日期 ${LocalDate.ofEpochDay(it.startDateEpochDay)}，共${it.weekCount}周"
-                } ?: "未设置学期"
-                aiEnhancer.enhance(text.take(2400), context, settings)
-                    .onSuccess { enhanced ->
-                        val current = editor.value
-                        if (current != null && current.inboxId == id) {
-                            editor.value = current.copy(
-                                draft = enhanced,
-                                title = enhanced.title.ifBlank { current.title },
-                                dateTimeText = enhanced.dateTimeEpochMillis?.let(::formatDateTime)
-                                    ?: current.dateTimeText,
-                                courseName = enhanced.courseName ?: current.courseName,
-                                location = enhanced.location ?: current.location,
-                                teachingWeekText = enhanced.teachingWeek?.toString()
-                                    ?: current.teachingWeekText,
-                                dayOfWeekText = enhanced.dayOfWeek?.toString()
-                                    ?: current.dayOfWeekText,
-                                startPeriodText = enhanced.startPeriod?.toString()
-                                    ?: current.startPeriodText,
-                                endPeriodText = enhanced.endPeriod?.toString()
-                                    ?: current.endPeriodText,
-                                ambiguitiesAcknowledged = enhanced.ambiguities.isEmpty(),
-                            )
+                val current = editor.value
+                aiEnhancer.extractDailyText(text, settings)
+                    .onSuccess { result ->
+                        if (editor.value === current) {
+                            presentDailyExtraction(id, result)
+                            messages.emit("已整理 ${result.drafts.size} 件事项，请逐项核对")
                         }
-                        repository.saveReparsedDraft(id, text, enhanced)
-                        messages.emit("AI 已生成结构化草稿，请核对后保存")
                     }
-                    .onFailure { messages.emit(it.message ?: "AI 增强失败，已保留本地草稿") }
+                    .onFailure { messages.emit("云端整理未完成，已保留本地草稿") }
             }
         }
     }
@@ -640,6 +724,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun closeEditor() {
+        pendingDailyDrafts.clear()
         editor.value = null
     }
 
@@ -739,6 +824,7 @@ class MainViewModel @Inject constructor(
                 }
                 repository.confirmInbox(value.inboxId)
                 timetableEditor.value = null
+                companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED))
                 messages.emit(
                     if (skippedCount == 0) "$importedCount 个上课时段已写入课表"
                     else "$importedCount 个上课时段已写入，跳过 $skippedCount 个重复时段",
@@ -860,7 +946,8 @@ class MainViewModel @Inject constructor(
                         )
                     }
                 }
-                editor.value = null
+                editor.value = pendingDailyDrafts.removeFirstOrNull()
+                companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED))
                 messages.emit("已收进弦歌册")
             }
         }
@@ -872,7 +959,25 @@ class MainViewModel @Inject constructor(
             withWorking {
                 val settings = settingsStore.settings.first()
                 if (!settings.aiEnabled) {
-                    messages.emit("请先在设置中启用 AI")
+                    messages.emit("请先在我的 → 智能服务中配置并开启联网服务")
+                    return@withWorking
+                }
+                if (value.draft.type != DraftType.COURSE_MEETING) {
+                    aiEnhancer.extractDailyText(value.sourceText, settings)
+                        .onSuccess { result ->
+                            if (editor.value !== value) return@onSuccess
+                            val enhanced = result.drafts.firstOrNull { it.title == value.title }
+                                ?: result.drafts.first()
+                            editor.value = value.copy(
+                                draft = enhanced,
+                                title = enhanced.title,
+                                dateTimeText = enhanced.dateTimeEpochMillis?.let(::formatDateTime).orEmpty(),
+                                location = enhanced.location.orEmpty(),
+                                ambiguitiesAcknowledged = enhanced.ambiguities.isEmpty(),
+                            )
+                            messages.emit(if (result.drafts.size > 1) "已整理当前草稿；多项内容可通过快捷整理逐项核对" else "整理完成，请核对后保存")
+                        }
+                        .onFailure { messages.emit("整理未完成，原草稿已保留") }
                     return@withWorking
                 }
                 val semester = repository.currentSemester()
@@ -881,6 +986,7 @@ class MainViewModel @Inject constructor(
                 } ?: "未设置学期"
                 aiEnhancer.enhance(value.sourceText, context, settings)
                     .onSuccess { enhanced ->
+                        if (editor.value !== value) return@onSuccess
                         editor.value = value.copy(
                             draft = enhanced,
                             title = enhanced.title.ifBlank { value.title },
@@ -898,9 +1004,9 @@ class MainViewModel @Inject constructor(
                                 ?: value.endPeriodText,
                             ambiguitiesAcknowledged = enhanced.ambiguities.isEmpty(),
                         )
-                        messages.emit("AI 增强完成，请核对后保存")
+                        messages.emit("整理完成，请核对后保存")
                     }
-                    .onFailure { messages.emit(it.message ?: "AI 增强失败") }
+                    .onFailure { messages.emit(it.message ?: "整理未完成，请稍后重试") }
             }
         }
     }
@@ -1089,7 +1195,7 @@ class MainViewModel @Inject constructor(
                 supportsVision = supportsVision,
                 encryptedApiKey = if (apiKey.isBlank()) current.encryptedApiKey else keyCipher.encrypt(apiKey),
             )
-            messages.emit("AI 设置已安全保存")
+            messages.emit("智能服务设置已保存")
         }
     }
 
@@ -1103,11 +1209,11 @@ class MainViewModel @Inject constructor(
     fun saveDitingAiAnnotation(enabled: Boolean) {
         viewModelScope.launch {
             settingsStore.updateDitingAiAnnotationEnabled(enabled)
-            messages.emit(if (enabled) "谛听 AI 自动标注已开启" else "谛听 AI 自动标注已关闭")
+            messages.emit(if (enabled) "课堂重点整理已开启" else "课堂重点整理已关闭")
         }
     }
 
-    fun testAiConnection(
+    suspend fun testAiConnection(
         enabled: Boolean,
         provider: String,
         baseUrl: String,
@@ -1116,25 +1222,19 @@ class MainViewModel @Inject constructor(
         authHeader: String,
         supportsVision: Boolean,
         apiKey: String,
-    ) {
-        viewModelScope.launch {
-            withWorking {
-                val current = settingsStore.settings.first()
-                val temporary = current.copy(
-                    aiEnabled = enabled,
-                    aiProvider = provider,
-                    aiBaseUrl = baseUrl.trim().trimEnd('/'),
-                    aiModel = model.trim(),
-                    aiVisionModel = visionModel.trim(),
-                    aiAuthHeader = authHeader.trim(),
-                    aiSupportsVision = supportsVision,
-                    encryptedApiKey = if (apiKey.isBlank()) current.encryptedApiKey else keyCipher.encrypt(apiKey),
-                )
-                aiEnhancer.testConnection(temporary)
-                    .onSuccess { messages.emit("连接成功") }
-                    .onFailure { messages.emit(it.message ?: "连接失败") }
-            }
-        }
+    ): Result<Unit> = win.iqwqi.xiangece.core.ai.cancellableResult {
+        val current = settingsStore.settings.first()
+        val temporary = current.copy(
+            aiEnabled = enabled,
+            aiProvider = provider,
+            aiBaseUrl = baseUrl.trim().trimEnd('/'),
+            aiModel = model.trim(),
+            aiVisionModel = visionModel.trim(),
+            aiAuthHeader = authHeader.trim(),
+            aiSupportsVision = supportsVision,
+            encryptedApiKey = if (apiKey.isBlank()) current.encryptedApiKey else keyCipher.encrypt(apiKey),
+        )
+        aiEnhancer.testConnection(temporary).getOrThrow()
     }
 
     fun addCourse(
@@ -1154,6 +1254,25 @@ class MainViewModel @Inject constructor(
             )
             scheduleCourse(meetingId, settingsStore.settings.first().courseReminderMinutes)
             messages.emit("课程已加入课表")
+        }
+    }
+
+    val calendarNotes = repository.calendarNotes.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList(),
+    )
+
+    suspend fun saveCalendarNote(day: Long, text: String): Boolean =
+        runCatching { repository.saveCalendarNote(day, text) }
+            .onFailure { messages.emit(it.message ?: "备注保存失败，请重试") }
+            .isSuccess
+
+    fun deleteTimetable(id: Long) {
+        viewModelScope.launch {
+            runCatching {
+                val removedMeetings = repository.deleteTimetable(id)
+                removedMeetings.forEach { reminderScheduler.cancelTarget(ReminderTargets.COURSE, it) }
+            }.onSuccess { messages.emit("课表已删除") }
+                .onFailure { messages.emit(it.message ?: "课表删除失败，请重试") }
         }
     }
 
@@ -1241,7 +1360,10 @@ class MainViewModel @Inject constructor(
     fun toggleTask(task: TaskEntity) {
         viewModelScope.launch {
             when (repository.toggleTask(task)) {
-                TaskStatus.DONE -> reminderScheduler.cancelTarget(ReminderTargets.TASK, task.id)
+                TaskStatus.DONE -> {
+                    reminderScheduler.cancelTarget(ReminderTargets.TASK, task.id)
+                    companionEvents.tryEmit(CompanionEvent(CompanionCue.HAPPY, page = 0))
+                }
                 TaskStatus.TODO -> repository.taskById(task.id)?.let {
                     val settings = settingsStore.settings.first()
                     reminderScheduler.scheduleTask(
@@ -1298,14 +1420,14 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun updateTask(task: TaskEntity, title: String, dateTimeText: String) {
+    fun updateTask(task: TaskEntity, title: String, dateTimeText: String, note: String) {
         val dueAt = dateTimeText.takeIf(String::isNotBlank)?.let(::parseDateTime)
         if (dateTimeText.isNotBlank() && dueAt == null) {
             messages.tryEmit("时间格式应为 2026-09-01 18:00")
             return
         }
         viewModelScope.launch {
-            repository.updateTask(task, title, dueAt)
+            repository.updateTask(task, title, dueAt, note)
             repository.taskById(task.id)?.let {
                 val settings = settingsStore.settings.first()
                 if (it.status == TaskStatus.TODO) {
@@ -1319,17 +1441,18 @@ class MainViewModel @Inject constructor(
                 }
             }
             messages.emit("任务修改已保存")
+            companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED, page = 0))
         }
     }
 
-    fun updateEvent(event: CampusEventEntity, title: String, dateTimeText: String) {
+    fun updateEvent(event: CampusEventEntity, title: String, dateTimeText: String, location: String, note: String) {
         val startsAt = parseDateTime(dateTimeText)
         if (startsAt == null) {
             messages.tryEmit("时间格式应为 2026-09-01 18:00")
             return
         }
         viewModelScope.launch {
-            repository.updateEvent(event, title, startsAt)
+            repository.updateEvent(event, title, startsAt, location, note)
             repository.eventById(event.id)?.let {
                 val settings = settingsStore.settings.first()
                 reminderScheduler.scheduleEvent(
@@ -1339,6 +1462,7 @@ class MainViewModel @Inject constructor(
                 )
             }
             messages.emit("事件修改已保存")
+            companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED, page = 0))
         }
     }
 
@@ -1363,6 +1487,7 @@ class MainViewModel @Inject constructor(
                 )
             }
             messages.emit("任务已加入今日")
+            companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED, page = 0))
         }
     }
 
@@ -1387,6 +1512,7 @@ class MainViewModel @Inject constructor(
                 )
             }
             messages.emit("事件已加入今日")
+            companionEvents.tryEmit(CompanionEvent(CompanionCue.SAVED, page = 0))
         }
     }
 
@@ -1502,9 +1628,9 @@ class MainViewModel @Inject constructor(
                 val oldReminders = repository.daoForBackup().allReminders()
                 reminderScheduler.cancelAlarms(oldReminders)
                 runCatching { backupManager.restoreFrom(uri) }
-                    .onSuccess {
+                    .onSuccess { noteWarning ->
                         reminderScheduler.restore(repository.daoForBackup().upcomingReminders())
-                        messages.emit("备份恢复完成，AI 密钥需重新填写")
+                        messages.emit(noteWarning ?: "备份恢复完成，服务密钥需重新填写")
                     }
                     .onFailure {
                         reminderScheduler.restore(oldReminders)
@@ -1559,6 +1685,8 @@ class MainViewModel @Inject constructor(
                 if (allDone) {
                     lastCelebratedEpochDay.value = today
                     messages.emit("今日厚积已成")
+                } else {
+                    companionEvents.tryEmit(CompanionEvent(CompanionCue.HAPPY, page = 1))
                 }
             }
         }
@@ -1619,6 +1747,7 @@ class MainViewModel @Inject constructor(
     }
 
     private suspend fun openInboxInternal(item: InboxItemEntity) {
+        pendingDailyDrafts.clear()
         val draft = repository.draftFor(item)
         if (draft == null) {
             messages.emit(item.errorMessage ?: "这条内容还没有可编辑草稿")
@@ -1628,6 +1757,7 @@ class MainViewModel @Inject constructor(
             inboxId = item.id,
             sourceText = item.ocrText.ifBlank { item.originalText },
             draft = draft,
+            sourceImagePath = item.imagePath,
         )
     }
 
@@ -1669,9 +1799,12 @@ class MainViewModel @Inject constructor(
     }
 
     private suspend fun withWorking(block: suspend () -> Unit) {
+        if (working.value) return
         working.value = true
         try {
             block()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (error: Throwable) {
             messages.emit(error.message ?: "操作失败")
         } finally {

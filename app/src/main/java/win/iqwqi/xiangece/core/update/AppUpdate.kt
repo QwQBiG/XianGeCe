@@ -62,6 +62,7 @@ class AppUpdateRepository @Inject constructor(
     private val json: Json,
 ) {
     suspend fun check(): AppUpdateState = withContext(Dispatchers.IO) {
+        if (!BuildConfig.LEGACY_UPDATE_FEED_ENABLED) return@withContext AppUpdateState.Idle
         runCatching {
             val request = Request.Builder()
                 .url(UPDATE_MANIFEST_URL)

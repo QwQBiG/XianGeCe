@@ -12,7 +12,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +26,7 @@ import okhttp3.OkHttpClient
 import win.iqwqi.xiangece.core.offline.OfflinePackArchive
 import win.iqwqi.xiangece.core.offline.ResumableHttpFileDownloader
 import java.util.concurrent.TimeUnit
+import win.iqwqi.xiangece.core.ocr.OfflineOcrPackStorage.Companion.sha256
 
 data class OfflineOcrPackFile(
     val localName: String,
@@ -48,6 +51,8 @@ data class OfflineOcrPackState(
     val bundled: Boolean = false,
     val paused: Boolean = false,
     val errorMessage: String? = null,
+    val selectedPackId: String = OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID,
+    val installedPackIds: Set<String> = emptySet(),
 ) {
     val progress: Float
         get() = if (totalBytes <= 0L) 0f else (downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 1f)
@@ -55,6 +60,7 @@ data class OfflineOcrPackState(
 
 object OfflineOcrPackCatalog {
     const val PP_OCRV5_MOBILE_ID = "pp_ocrv5_mobile_zh_en_onnx"
+    const val PP_OCRV5_SERVER_ID = "pp_ocrv5_server_zh_en_onnx"
     val chineseMobile = listOf(
         OfflineOcrPackFile(
             localName = "det.onnx",
@@ -92,6 +98,17 @@ object OfflineOcrPackCatalog {
     )
 
     val totalBytes: Long = chineseMobile.sumOf { it.bytes }
+    val packs: List<OfflineOcrPackDescriptor> = listOf(
+        OfflineOcrPackDescriptor(
+            id = PP_OCRV5_MOBILE_ID,
+            title = "中文 OCR · 轻量",
+            description = "PP-OCRv5 Mobile · 适合日常截图与课表，下载小、占用低",
+            files = chineseMobile,
+        ),
+        OfflineOcrServerPack.descriptor,
+    )
+
+    fun find(id: String): OfflineOcrPackDescriptor? = packs.firstOrNull { it.id == id }
 }
 
 @Singleton
@@ -100,16 +117,15 @@ class OfflineOcrPackManager @Inject constructor(
     private val httpClient: OkHttpClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val operationLock = Any()
+    private val preferences = context.getSharedPreferences("ocr-offline-selection", Context.MODE_PRIVATE)
+    private val storage = OfflineOcrPackStorage(File(context.filesDir, "ocr-offline"))
+    @Volatile private var selectedId = preferences.getString("selectedPackId", null)
+        ?.takeIf { OfflineOcrPackCatalog.find(it) != null } ?: OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID
     private val _state = MutableStateFlow(readInstalledState())
     val state: StateFlow<OfflineOcrPackState> = _state.asStateFlow()
 
-    init {
-        if (_state.value.installed) {
-            scope.launch {
-                if (!verifyInstalledFiles()) markCorrupted()
-            }
-        }
-    }
+    // Readiness checks marker/sizes; every newly loaded engine verifies full file hashes.
     private var downloadJob: Job? = null
     @Volatile private var activeCall: Call? = null
     private val downloadClient = httpClient.newBuilder()
@@ -119,67 +135,97 @@ class OfflineOcrPackManager @Inject constructor(
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    fun isChinesePackInstalled(): Boolean = _state.value.installed && modelDirectory().isDirectory
+    fun selectedPack(): OfflineOcrPackDescriptor = checkNotNull(OfflineOcrPackCatalog.find(selectedId))
 
-    private fun hasBundledPack(): Boolean = runCatching {
+    fun selectPack(id: String): Boolean = synchronized(operationLock) {
+        if (OfflineOcrPackCatalog.find(id) == null || downloadJob?.isCompleted == false) return@synchronized false
+        if (!preferences.edit().putString("selectedPackId", id).commit()) return@synchronized false
+        selectedId = id
+        _state.value = readInstalledState()
+        true
+    }
+
+    fun isChinesePackInstalled(pack: OfflineOcrPackDescriptor = selectedPack()): Boolean = storage.installed(pack)
+
+    private fun hasBundledPack(): Boolean = selectedId == OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID && runCatching {
         context.assets.open(BUNDLED_ASSET_PATH).close()
         true
     }.getOrDefault(false)
 
-    fun modelDirectory(): File = File(
-        context.filesDir,
-        "ocr-offline/${OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID}",
-    )
+    fun modelDirectory(pack: OfflineOcrPackDescriptor = selectedPack()): File = storage.directory(pack)
 
     fun modelFile(localName: String): File = File(modelDirectory(), localName)
 
-    fun markCorrupted(message: String = "离线 OCR 包校验失败，请重新导入或下载") {
-        val target = modelDirectory()
+    fun markCorrupted(
+        message: String = "离线 OCR 包校验失败，请重新导入或下载",
+        pack: OfflineOcrPackDescriptor = selectedPack(),
+    ) = synchronized(operationLock) {
+        if (downloadJob?.isCompleted == false) return@synchronized
+        val target = storage.directory(pack)
         File(target, INSTALL_MARKER).delete()
-        OfflineOcrPackCatalog.chineseMobile.forEach { file ->
+        pack.files.forEach { file ->
             File(target, file.localName).delete()
         }
         _state.value = readInstalledState().copy(
-            installed = false,
-            downloading = false,
-            paused = false,
-            errorMessage = message,
+            errorMessage = message.takeIf { selectedId == pack.id },
         )
     }
 
-    suspend fun verifyInstalledFiles(): Boolean = withContext(Dispatchers.IO) {
-        if (!_state.value.installed) return@withContext false
-        OfflineOcrPackCatalog.chineseMobile.all { file ->
-            val candidate = File(modelDirectory(), file.localName)
-            candidate.isFile && candidate.length() == file.bytes && sha256(candidate) == file.sha256
+    suspend fun verifyInstalledFiles(pack: OfflineOcrPackDescriptor = selectedPack()): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching { storage.verify(pack) }.getOrDefault(false)
         }
+
+    fun startChineseDownload() = startOperation {
+        if (hasBundledPack()) importBundledPack() else install()
     }
 
-    fun startChineseDownload() {
-        if (downloadJob?.isActive == true || isChinesePackInstalled()) return
-        val job = scope.launch {
-            if (hasBundledPack()) importBundledPack() else install()
+    private fun startOperation(action: suspend () -> Unit) = synchronized(operationLock) {
+        if (downloadJob?.isCompleted == false || isChinesePackInstalled()) return@synchronized
+        _state.value = _state.value.copy(downloading = true, paused = false, errorMessage = null)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Log.e("OfflineOcrPack", "OCR resource operation failed", error)
+                _state.value = readInstalledState().copy(errorMessage = "资源处理没有完成，请检查可用空间后重试")
+            }
         }
         downloadJob = job
-        job.invokeOnCompletion { if (downloadJob === job) downloadJob = null }
+        job.invokeOnCompletion { cause ->
+            synchronized(operationLock) {
+                if (downloadJob === job) {
+                    downloadJob = null
+                    _state.value = _state.value.copy(
+                        downloading = false,
+                        paused = !_state.value.installed && (cause is CancellationException || _state.value.paused),
+                        currentFile = "",
+                    )
+                }
+            }
+        }
+        job.start()
+        Unit
     }
 
-    fun cancelDownload() {
+    fun cancelDownload() = synchronized(operationLock) {
+        if (downloadJob?.isCompleted != false) return@synchronized
         activeCall?.cancel()
         downloadJob?.cancel()
-        _state.value = _state.value.copy(downloading = false, currentFile = "", paused = true, errorMessage = null)
+        // Keep selection disabled until the old operation has actually stopped.
+        _state.value = _state.value.copy(currentFile = "正在暂停", errorMessage = null)
     }
 
-    fun importChinesePack(uri: Uri) {
-        if (downloadJob?.isActive == true || isChinesePackInstalled()) return
-        val job = scope.launch { importPack(uri) }
-        downloadJob = job
-        job.invokeOnCompletion { if (downloadJob === job) downloadJob = null }
-    }
-    fun deleteChinesePack() {
-        if (downloadJob?.isActive == true) return
-        modelDirectory().deleteRecursively()
-        _state.value = OfflineOcrPackState(totalBytes = OfflineOcrPackCatalog.totalBytes)
+    fun importChinesePack(uri: Uri) = startOperation { importPack(uri) }
+
+    fun deleteChinesePack() = synchronized(operationLock) {
+        if (downloadJob?.isCompleted == false) return@synchronized
+        val target = modelDirectory()
+        check(target.canonicalFile.parentFile == File(context.filesDir, "ocr-offline").canonicalFile)
+        val deleted = target.deleteRecursively()
+        _state.value = readInstalledState().copy(errorMessage = if (deleted) null else "部分资源未能删除，请重试")
     }
 
     private suspend fun importBundledPack() {
@@ -189,7 +235,7 @@ class OfflineOcrPackManager @Inject constructor(
                 downloading = true,
                 paused = false,
                 currentFile = "正在读取内置离线包",
-                totalBytes = OfflineOcrPackCatalog.totalBytes,
+                totalBytes = selectedPack().totalBytes,
                 errorMessage = null,
             )
             context.assets.open(BUNDLED_ASSET_PATH).use { input ->
@@ -213,25 +259,33 @@ class OfflineOcrPackManager @Inject constructor(
     }
 
     private suspend fun importPack(uri: Uri) {
-        val pack = OfflineOcrPackCatalog.chineseMobile
+        val descriptor = selectedPack()
+        val pack = descriptor.files
         val target = modelDirectory()
-        val staging = File(target.parentFile, ".${OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID}.import-${System.nanoTime()}")
+        val staging = File(target.parentFile, ".${descriptor.id}.import-${System.nanoTime()}")
         try {
-            _state.value = OfflineOcrPackState(
+            _state.value = _state.value.copy(
                 downloading = true,
+                downloadedBytes = 0L,
                 currentFile = "本地 ZIP",
-                totalBytes = OfflineOcrPackCatalog.totalBytes,
+                totalBytes = descriptor.totalBytes,
             )
             val expected = pack.associate { it.localName to it.bytes }
             val extracted = OfflinePackArchive.extract(context.contentResolver, uri, staging, expected)
-            target.mkdirs()
-            File(target, INSTALL_MARKER).delete()
-            var imported = 0L
+            // Validate the entire ZIP before touching an existing/resumable installation.
             pack.forEach { file ->
+                currentCoroutineContext().ensureActive()
                 val source = extracted.getValue(file.localName)
                 check(source.length() == file.bytes && sha256(source) == file.sha256) {
                     "离线 OCR 资源校验失败：${file.localName}"
                 }
+            }
+            check(target.mkdirs() || target.isDirectory) { "无法创建 OCR 资源目录" }
+            File(target, INSTALL_MARKER).delete()
+            var imported = 0L
+            pack.forEach { file ->
+                currentCoroutineContext().ensureActive()
+                val source = extracted.getValue(file.localName)
                 val part = File(target, file.localName + ".part")
                 source.copyTo(part, overwrite = true)
                 promotePart(part, File(target, file.localName), file.localName)
@@ -243,14 +297,11 @@ class OfflineOcrPackManager @Inject constructor(
             }
             val marker = File(target, INSTALL_MARKER)
             val markerPart = File(target, "$INSTALL_MARKER.part")
-            markerPart.writeText(OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID, Charsets.UTF_8)
+            currentCoroutineContext().ensureActive()
+            markerPart.writeText(descriptor.id, Charsets.UTF_8)
             if (marker.exists()) marker.delete()
             check(markerPart.renameTo(marker)) { "无法写入 OCR 安装标记" }
-            _state.value = OfflineOcrPackState(
-                installed = true,
-                downloadedBytes = OfflineOcrPackCatalog.totalBytes,
-                totalBytes = OfflineOcrPackCatalog.totalBytes,
-            )
+            _state.value = readInstalledState()
         } catch (cancelled: CancellationException) {
             _state.value = _state.value.copy(downloading = false, paused = true, currentFile = "")
             throw cancelled
@@ -260,7 +311,7 @@ class OfflineOcrPackManager @Inject constructor(
                 downloading = false,
                 paused = false,
                 currentFile = "",
-                errorMessage = "这个离线 OCR 包无法使用，请选择对应的 ZIP 文件后重试。",
+                errorMessage = "这个 ZIP 与「${descriptor.title}」不匹配或文件损坏，请选择对应资源包后重试。",
             )
         } finally {
             staging.deleteRecursively()
@@ -268,8 +319,9 @@ class OfflineOcrPackManager @Inject constructor(
     }
 
     private suspend fun install() {
+        val descriptor = selectedPack()
         val target = modelDirectory().apply { mkdirs() }
-        var downloaded = OfflineOcrPackCatalog.chineseMobile.sumOf { file ->
+        var downloaded = descriptor.files.sumOf { file ->
             val finalFile = File(target, file.localName)
             if (finalFile.isFile && finalFile.length() == file.bytes && sha256(finalFile) == file.sha256) {
                 file.bytes
@@ -281,13 +333,14 @@ class OfflineOcrPackManager @Inject constructor(
                     ?: 0L
             }
         }
-        _state.value = OfflineOcrPackState(
+        _state.value = _state.value.copy(
             downloading = true,
             downloadedBytes = downloaded,
-            totalBytes = OfflineOcrPackCatalog.totalBytes,
+            totalBytes = descriptor.totalBytes,
         )
         try {
-            for (file in OfflineOcrPackCatalog.chineseMobile) {
+            for (file in descriptor.files) {
+                currentCoroutineContext().ensureActive()
                 val finalFile = File(target, file.localName)
                 val before = if (finalFile.isFile && finalFile.length() == file.bytes && sha256(finalFile) == file.sha256) {
                     file.bytes
@@ -314,10 +367,11 @@ class OfflineOcrPackManager @Inject constructor(
             }
             val marker = File(target, INSTALL_MARKER)
             val markerPart = File(target, "$INSTALL_MARKER.part")
-            markerPart.writeText(OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID, Charsets.UTF_8)
+            currentCoroutineContext().ensureActive()
+            markerPart.writeText(descriptor.id, Charsets.UTF_8)
             if (marker.exists()) check(marker.delete()) { "无法更新 OCR 安装标记" }
             check(markerPart.renameTo(marker)) { "无法写入 OCR 安装标记" }
-            _state.value = OfflineOcrPackState(installed = true, downloadedBytes = OfflineOcrPackCatalog.totalBytes, totalBytes = OfflineOcrPackCatalog.totalBytes)
+            _state.value = readInstalledState()
         } catch (cancelled: CancellationException) {
             _state.value = _state.value.copy(downloading = false, currentFile = "", paused = true, errorMessage = null)
             throw cancelled
@@ -360,39 +414,19 @@ class OfflineOcrPackManager @Inject constructor(
         }
     }
     private fun readInstalledState(): OfflineOcrPackState {
-        val target = modelDirectory()
-        val downloaded = OfflineOcrPackCatalog.chineseMobile.sumOf { file ->
-            val finalFile = File(target, file.localName)
-            when {
-                finalFile.isFile && finalFile.length() == file.bytes -> file.bytes
-                else -> File(target, file.localName + ".part")
-                    .takeIf(File::isFile)
-                    ?.length()
-                    ?.coerceAtMost(file.bytes)
-                    ?: 0L
-            }
-        }
-        val marker = File(target, INSTALL_MARKER)
-        val markerValid = marker.isFile && runCatching { marker.readText(Charsets.UTF_8).trim() == OfflineOcrPackCatalog.PP_OCRV5_MOBILE_ID }.getOrDefault(false)
-        val installed = markerValid && downloaded == OfflineOcrPackCatalog.totalBytes
+        val pack = selectedPack()
+        val downloaded = storage.downloadedBytes(pack)
+        val installedIds = OfflineOcrPackCatalog.packs.filter(storage::installed).map { it.id }.toSet()
+        val installed = pack.id in installedIds
         return OfflineOcrPackState(
             installed = installed,
             bundled = hasBundledPack(),
             paused = !installed && downloaded > 0L,
             downloadedBytes = downloaded,
-            totalBytes = OfflineOcrPackCatalog.totalBytes,
+            totalBytes = pack.totalBytes,
+            selectedPackId = pack.id,
+            installedPackIds = installedIds,
         )
-    }
-    private fun sha256(file: File): String {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(1024 * 1024)
-            var count: Int
-            while (input.read(buffer).also { count = it } >= 0) {
-                if (count > 0) digest.update(buffer, 0, count)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
     }
     fun close() {
         activeCall?.cancel()

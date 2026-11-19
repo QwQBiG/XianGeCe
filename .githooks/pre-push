@@ -1,0 +1,22 @@
+#!/bin/sh
+# Verify the official repository for maintainer pushes. This source tree uses ordinary Git.
+set -eu
+
+repository='QwQBiG/XianGeCe'
+repository_id=1319766111
+case "${2-}" in
+    "https://github.com/$repository"|"https://github.com/$repository.git"|\
+    "git@github.com:$repository"|"git@github.com:$repository.git"|\
+    "ssh://git@github.com/$repository"|"ssh://git@github.com/$repository.git")
+        ;;
+    *) printf '%s\n' 'Push blocked: this URL does not point to QwQBiG/XianGeCe.' >&2; exit 1 ;;
+esac
+
+if ! actual=$(gh api --hostname github.com "repos/$repository" --jq '[(.id | tostring), .full_name, .visibility, (.archived | tostring)] | join(" ")' </dev/null); then
+    printf '%s\n' 'Push blocked: GitHub CLI could not verify the repository.' >&2
+    exit 1
+fi
+case "$actual" in
+    "$repository_id $repository public false") ;;
+    *) printf '%s\n' 'Push blocked: unexpected repository ID, name, visibility or archive state.' >&2; exit 1 ;;
+esac

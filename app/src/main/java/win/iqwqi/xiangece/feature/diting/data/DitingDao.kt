@@ -49,6 +49,12 @@ interface DitingDao {
     @Query("SELECT * FROM diting_segments WHERE sessionId = :sessionId ORDER BY sequence")
     suspend fun allSegments(sessionId: Long): List<DitingSegmentEntity>
 
+    @Query("SELECT * FROM diting_segments WHERE sessionId = :sessionId AND isFinal = 0 AND status IN ('waiting_for_transcription', 'transcribing') ORDER BY sequence LIMIT 1")
+    suspend fun nextAwaitingTranscription(sessionId: Long): DitingSegmentEntity?
+
+    @Query("SELECT COUNT(*) FROM diting_segments WHERE sessionId = :sessionId AND isFinal = 0 AND status IN ('waiting_for_transcription', 'transcribing')")
+    suspend fun awaitingTranscriptionCount(sessionId: Long): Int
+
     @Query("SELECT * FROM diting_segments WHERE sessionId = :sessionId AND sequence = :sequence LIMIT 1")
     suspend fun segmentBySequence(sessionId: Long, sequence: Int): DitingSegmentEntity?
 

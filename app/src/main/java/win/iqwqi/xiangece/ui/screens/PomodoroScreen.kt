@@ -15,7 +15,9 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -51,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,13 +69,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
+import androidx.core.view.WindowCompat
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -84,6 +91,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import win.iqwqi.xiangece.R
 import win.iqwqi.xiangece.ui.theme.XiangeceTheme
+import win.iqwqi.xiangece.ui.components.AppFormSheet
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Remove
 
 private val Context.pomodoroDataStore by preferencesDataStore("pomodoro_settings")
 private val KEY_WORK = intPreferencesKey("work_minutes")
@@ -139,32 +150,37 @@ fun PomodoroSetupSheet(onDismiss: () -> Unit) {
         config = loadPomodoroConfig(context)
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    AppFormSheet(
+        title = "专注番茄", subtitle = "留一段时间，专心做好眼前的事。",
+        onDismiss = onDismiss, confirmLabel = "开始专注",
+        onConfirm = {
+            scope.launch {
+                savePomodoroConfig(context, config)
+                val intent = Intent(context, PomodoroActivity::class.java).apply {
+                    putExtra("work_minutes", config.workMinutes)
+                    putExtra("break_minutes", config.breakMinutes)
+                    putExtra("rounds", config.rounds)
+                    putExtra("dnd", config.doNotDisturb)
+                    putExtra("keep_screen", config.keepScreenOn)
+                    putExtra("sound", config.soundOnComplete)
+                }
+                context.startActivity(intent)
+                onDismiss()
+            }
+        },
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("专注番茄", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(
-                "设定时长与专注环境，开始沉浸式专注。完成后会有提醒。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
 
             DurationPickerRow(
-                label = "专注时长（分钟）",
+                label = "专注时长",
+                unit = "分钟",
                 value = config.workMinutes,
                 range = 5..90,
                 step = 5,
                 onValueChange = { config = config.copy(workMinutes = it) },
             )
             DurationPickerRow(
-                label = "休息时长（分钟）",
+                label = "休息时长",
+                unit = "分钟",
                 value = config.breakMinutes,
                 range = 1..30,
                 step = 1,
@@ -197,29 +213,6 @@ fun PomodoroSetupSheet(onDismiss: () -> Unit) {
                 onCheckedChange = { config = config.copy(soundOnComplete = it) },
             )
 
-            Button(
-                onClick = {
-                    scope.launch {
-                        savePomodoroConfig(context, config)
-                        val intent = Intent(context, PomodoroActivity::class.java).apply {
-                            putExtra("work_minutes", config.workMinutes)
-                            putExtra("break_minutes", config.breakMinutes)
-                            putExtra("rounds", config.rounds)
-                            putExtra("dnd", config.doNotDisturb)
-                            putExtra("keep_screen", config.keepScreenOn)
-                            putExtra("sound", config.soundOnComplete)
-                        }
-                        context.startActivity(intent)
-                        onDismiss()
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Outlined.Timer, contentDescription = null)
-                Spacer(Modifier.size(6.dp))
-                Text("开始专注")
-            }
-        }
     }
 }
 
@@ -229,6 +222,7 @@ private fun DurationPickerRow(
     value: Int,
     range: IntRange,
     step: Int,
+    unit: String? = null,
     onValueChange: (Int) -> Unit,
 ) {
     Row(
@@ -237,31 +231,29 @@ private fun DurationPickerRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.titleMedium)
-            Text(
-                "范围 ${range.first}–${range.last}，步进 $step",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(onClick = {
+            FilledTonalIconButton(enabled = value > range.first, onClick = {
                 val next = (value - step).coerceAtLeast(range.first)
                 onValueChange(next)
-            }) { Text("−") }
+            }) { Icon(Icons.Outlined.Remove, "减少$label") }
             Text(
                 "$value",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 8.dp),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.widthIn(min = 56.dp).padding(horizontal = 8.dp),
             )
-            OutlinedButton(onClick = {
+            FilledTonalIconButton(enabled = value < range.last, onClick = {
                 val next = (value + step).coerceAtMost(range.last)
                 onValueChange(next)
-            }) { Text("+") }
+            }) { Icon(Icons.Outlined.Add, "增加$label") }
         }
     }
 }
@@ -303,16 +295,12 @@ class PomodoroActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         // 沉浸全屏
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-        )
-
         val workMinutes = intent.getIntExtra("work_minutes", 25).coerceIn(1, 180)
         val breakMinutes = intent.getIntExtra("break_minutes", 5).coerceIn(1, 60)
         val rounds = intent.getIntExtra("rounds", 4).coerceIn(1, 12)
@@ -331,14 +319,29 @@ class PomodoroActivity : ComponentActivity() {
             .apply()
         if (doNotDisturb) enableSystemDoNotDisturb()
 
+        val initialSettings = runBlocking { settingsStore.settings.first() }
         setContent {
             val settings by settingsStore.settings.collectAsState(
-                initial = win.iqwqi.xiangece.data.settings.AppSettings(),
+                initial = initialSettings,
             )
+            val useDarkTheme = if (settings.followSystemTheme) isSystemInDarkTheme() else settings.darkMode
             XiangeceTheme(
-                darkTheme = settings.darkMode,
+                darkTheme = useDarkTheme,
                 themeSeedId = settings.themeSeed,
+                companion = settings.companion,
             ) {
+                val background = MaterialTheme.colorScheme.background.toArgb()
+                SideEffect {
+                    window.statusBarColor = background
+                    window.navigationBarColor = background
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        window.isNavigationBarContrastEnforced = false
+                    }
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !useDarkTheme
+                        isAppearanceLightNavigationBars = !useDarkTheme
+                    }
+                }
                 PomodoroFullScreen(
                     workSeconds = workMinutes * 60L,
                     breakSeconds = breakMinutes * 60L,

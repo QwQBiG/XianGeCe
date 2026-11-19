@@ -60,6 +60,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -78,6 +80,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -156,28 +159,31 @@ fun HabitsScreen(
         }
     }
 
-    // 今日还没完成但有历史连续，触发"快断签"提醒脉冲
+    // Keep the streak reminder visible without a continuous animation.
     val hasStreak = stats.currentStreak > 0
     val todayIsEmpty = stats.todayCompletedHabitIds.isEmpty()
     val streakWillBreak = hasStreak && todayIsEmpty
 
     Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-        Column(
+        LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(
+                .fillMaxSize().testTag("habits-list"),
+            contentPadding = PaddingValues(
                     start = 20.dp,
-                    top = 20.dp,
+                    top = 8.dp,
                     end = 20.dp,
-                    bottom = contentPadding.calculateBottomPadding(),
+                    bottom = contentPadding.calculateBottomPadding() + 96.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item(key = "header") {
             BrandHeader(
                 title = "厚积",
-                subtitle = "每日坚持与习惯记录",
+                subtitle = "把想坚持的事，慢慢变成日常",
                 icon = Icons.Outlined.AutoGraph,
             )
+            }
+            item(key = "statistics") {
             HabitStatsHeader(
                 stats = stats,
                 totalHabits = sortedHabits.size,
@@ -185,24 +191,24 @@ fun HabitsScreen(
                 customQuotes = customQuotes,
                 onOpenHeatmap = { showHeatmap = true },
             )
+            }
 
             if (sortedHabits.isEmpty()) {
+                item {
                 EmptyCard(
                     "千里之行，始于足下",
-                    "点击下方加号，记录今日第一件坚持之事。每一次打卡，都是未来的回响。",
+                    "点击下方加号，添加一件想长期坚持的小事。",
                 )
+                }
             } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 96.dp),
-                ) {
                     items(sortedHabits, key = { it.id }) { habit ->
+                        val motion = LocalCompanionAppearance.current.motionEnabled
                         val isDoneToday = habit.id in stats.todayCompletedHabitIds
                         val perHabit = remember(habit.id, checkins.size) {
                             computePerHabitStats(habit, checkins)
                         }
                         HabitRow(
+                            modifier = if (motion) Modifier.animateItem() else Modifier,
                             habit = habit,
                             isDoneToday = isDoneToday,
                             streakDays = perHabit.streakDays,
@@ -215,7 +221,6 @@ fun HabitsScreen(
                             onLongPress = { editing = habit },
                         )
                     }
-                }
             }
         }
 
@@ -227,7 +232,7 @@ fun HabitsScreen(
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = contentPadding.calculateBottomPadding() + 16.dp),
         ) {
-            Icon(Icons.Outlined.Add, contentDescription = null)
+            Icon(Icons.Outlined.Add, contentDescription = "新增长期事项")
         }
     }
 
@@ -257,7 +262,7 @@ fun HabitsScreen(
     }
     pendingDelete?.let { habit ->
         AppConfirmDialog(
-            title = "删除这条长期事项？",
+            title = "删除这个习惯？",
             message = "已积累的 ${state.habitCheckins.count { it.habitId == habit.id }} 次打卡记录会一并删除，且无法恢复。",
             onDismiss = { pendingDelete = null },
             onConfirm = {
@@ -288,7 +293,7 @@ fun HabitsScreen(
 }
 
 /**
- * 顶栏统计：4 个核心数字 + 今日进度条 + 每日箴言。
+ * 累计与连续天数为主，完成次数、今日进度和箴言为辅。
  * 整体可点击，打开年度热力图弹层。
  */
 @Composable
@@ -304,20 +309,8 @@ private fun HabitStatsHeader(
     val rippleIndication = ripple(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
     val interactionSource = remember { MutableInteractionSource() }
 
-    // 连续天数快断时的脉冲动画
-    val streakPulse by animateFloatAsState(
-        targetValue = if (streakWillBreak) 1f else 0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "streakPulse",
-    )
-    val streakAccent = if (streakWillBreak) {
-        MaterialTheme.colorScheme.error.copy(alpha = 0.4f + streakPulse * 0.6f)
-    } else {
-        MaterialTheme.colorScheme.error
-    }
+    val motion = LocalCompanionAppearance.current.motionEnabled
+    val streakAccent = if (streakWillBreak) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
 
     // 每日箴言（按日期取，相同日期相同）。用户自定义箴言优先。
     val todayQuote = remember(customQuotes) { getDailyQuote(customQuotes) }
@@ -331,59 +324,30 @@ private fun HabitStatsHeader(
                 indication = rippleIndication,
                 onClick = onOpenHeatmap,
             ),
-        elevation = 4.dp,
+        elevation = 0.dp,
     ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                val animatedTotalDays by animateFloatAsState(targetValue = stats.totalDays.toFloat(), label = "totalDaysTile")
-                StatTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.AutoGraph,
-                    value = "${animatedTotalDays.toInt()}",
-                    label = "累计天数",
-                )
-                val animatedStreak by animateFloatAsState(targetValue = stats.currentStreak.toFloat(), label = "streakTile")
-                StatTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.LocalFireDepartment,
-                    value = "${animatedStreak.toInt()}",
-                    label = "连续天数",
-                    accent = streakAccent,
-                )
-                val animatedTotalCheckins by animateFloatAsState(targetValue = stats.totalCheckins.toFloat(), label = "totalCheckinsTile")
-                StatTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Check,
-                    value = "${animatedTotalCheckins.toInt()}",
-                    label = "累计完成",
-                )
-                val animatedMonthCheckins by animateFloatAsState(targetValue = stats.monthCheckins.toFloat(), label = "monthCheckinsTile")
-                StatTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.CalendarMonth,
-                    value = "${animatedMonthCheckins.toInt()}",
-                    label = "本月完成",
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(Modifier.weight(1f), Icons.Outlined.AutoGraph, "${stats.totalDays}", "累计天数")
+                StatTile(Modifier.weight(1f), Icons.Outlined.LocalFireDepartment, "${stats.currentStreak}", "连续天数", streakAccent)
             }
             Spacer(Modifier.height(12.dp))
-            val todayTotal = totalHabits.coerceAtLeast(1)
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("累计完成 ${stats.totalCheckins} 次", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("本月完成 ${stats.monthCheckins} 次", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(12.dp))
+            val todayTotal = totalHabits
             val todayDone = stats.todayCompletedHabitIds.size.coerceAtMost(todayTotal)
-            val progress = (todayDone.toFloat() / todayTotal).coerceIn(0f, 1f)
-            val animatedProgress by animateFloatAsState(targetValue = progress, label = "habitProgress")
+            val progress = todayDone.toFloat() / todayTotal.coerceAtLeast(1)
+            val animatedProgress by animateFloatAsState(progress, tween(if (motion) 200 else 0), label = "habitProgress")
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 LinearProgressIndicator(
-                    progress = { animatedProgress },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(8.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    progress = { animatedProgress }, modifier = Modifier.weight(1f).height(6.dp),
+                    color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     strokeCap = StrokeCap.Round,
                 )
-                Text(
-                    "今日 $todayDone/$todayTotal",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("今日 $todayDone/$todayTotal", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // 每日箴言
             Spacer(Modifier.height(10.dp))
@@ -422,12 +386,8 @@ private fun StatTile(
 }
 
 /**
- * 单条长期事项的卡片（增强版）：
- * 1. 点击完成 = "墨迹扩散"动效（径向渐变从中心向外晕染）。
- * 2. 卡片背景缓动过渡（300ms tween）。
- * 3. 数字跳动由外层 count-up 驱动。
- *
- * 注：30 天热力图已移至顶栏"厚积"入口打开的年度总览弹层，单卡片不再展示。
+ * 完成时短暂改变底色与勾选标记，列表负责位置过渡。
+ * 历史热力图由顶栏统计打开。
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -439,59 +399,24 @@ private fun HabitRow(
     daysSinceCreation: Int,
     onToggle: () -> Unit,
     onLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val habitColor = Color(habit.colorArgb)
-    val stampAnimatable = remember { Animatable(0f) }
-    LaunchedEffect(isDoneToday) {
-        if (isDoneToday) {
-            stampAnimatable.snapTo(0f)
-            stampAnimatable.animateTo(
-                targetValue = 1f,
-                animationSpec = keyframes {
-                    durationMillis = 500
-                    0f at 0 with LinearEasing
-                    1.2f at 250 with LinearEasing
-                    1f at 500 with LinearEasing
-                },
-            )
-        } else {
-            stampAnimatable.snapTo(0f)
-        }
-    }
-
-    // Card scale + background color transition (300ms smooth tween)
-    val cardScale by animateFloatAsState(
-        targetValue = if (isDoneToday) 1f else 0.985f,
-        animationSpec = tween(durationMillis = 300),
-        label = "habitCardScale",
-    )
+    val motion = LocalCompanionAppearance.current.motionEnabled
     val backgroundColor by animateColorAsState(
-        targetValue = if (isDoneToday) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-        } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-        },
-        animationSpec = tween(durationMillis = 300),
+        targetValue = if (isDoneToday) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(if (motion) 180 else 0),
         label = "habitCardBg",
     )
-    val borderColor by animateColorAsState(
-        targetValue = if (isDoneToday) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
-        } else {
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
-        },
-        animationSpec = tween(durationMillis = 300),
-        label = "habitCardBorder",
-    )
 
-    val cardShape = RoundedCornerShape(24.dp)
+    val cardShape = RoundedCornerShape(20.dp)
     val rippleColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
     val rippleIndication = ripple(color = rippleColor)
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .scale(cardScale)
             .clip(cardShape)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -501,34 +426,20 @@ private fun HabitRow(
             ),
         shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
-        border = CardDefaults.outlinedCardBorder(enabled = true).copy(
-            brush = SolidColor(borderColor),
-        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(modifier = Modifier.fillMaxWidth()) {
-            // 左侧色条：4dp 宽渐变，用 ConstraintLayout/Row 嵌套实现整高
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(habitColor.copy(alpha = 0.7f), habitColor.copy(alpha = 0.25f)),
-                        ),
-                    ),
-            )
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(16.dp),
+                    .padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 16.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-            // 左侧印章：墨迹扩散动效
+            // The colored completion control keeps each habit recognizable.
             Box(
                 modifier = Modifier
                     .size(44.dp)
@@ -545,8 +456,8 @@ private fun HabitRow(
             ) {
                 androidx.compose.animation.AnimatedVisibility(
                     visible = isDoneToday,
-                    enter = scaleIn(initialScale = 0.3f) + fadeIn(animationSpec = tween(300)),
-                    exit = fadeOut(animationSpec = tween(200)),
+                    enter = scaleIn(initialScale = 0.85f, animationSpec = tween(if (motion) 160 else 0)) + fadeIn(tween(if (motion) 160 else 0)),
+                    exit = fadeOut(animationSpec = tween(if (motion) 100 else 0)),
                 ) {
                     Icon(
                         Icons.Outlined.Check,
@@ -554,32 +465,6 @@ private fun HabitRow(
                         tint = Color.White,
                         modifier = Modifier.size(24.dp),
                     )
-                }
-                // 墨迹扩散：径向渐变模拟墨晕在纸上散开的效果
-                if (stampAnimatable.value > 0f && stampAnimatable.value < 1.5f) {
-                    Canvas(modifier = Modifier.matchParentSize()) {
-                        val progress = stampAnimatable.value.coerceIn(0f, 1f)
-                        val center = Offset(size.minDimension / 2f, size.minDimension / 2f)
-                        val maxRadius = size.minDimension * (0.4f + progress * 1.8f)
-                        // 多层墨晕：外圈大而淡，内圈小而浓
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    habitColor.copy(alpha = 0.35f * (1f - progress)),
-                                    habitColor.copy(alpha = 0.08f * (1f - progress)),
-                                    Color.Transparent,
-                                ),
-                            ),
-                            radius = maxRadius,
-                            center = center,
-                        )
-                        // 中心残留的一点浓墨
-                        drawCircle(
-                            color = habitColor.copy(alpha = 0.5f * (1f - progress)),
-                            radius = size.minDimension * 0.25f * (1f - progress * 0.6f),
-                            center = center,
-                        )
-                    }
                 }
             }
             // 中间文本区域
@@ -590,7 +475,7 @@ private fun HabitRow(
                     fontWeight = FontWeight.SemiBold,
                     color = if (isDoneToday) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                     textDecoration = if (isDoneToday) TextDecoration.LineThrough else null,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (habit.description.isNotBlank()) {
@@ -614,19 +499,9 @@ private fun HabitRow(
                     HabitMetaChip("已坚持 $daysSinceCreation 天", MaterialTheme.colorScheme.onSurfaceVariant, Icons.Outlined.Schedule)
                 }
             }
-            Icon(
-                Icons.Outlined.Edit,
-                contentDescription = "编辑",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-                        onClick = onLongPress,
-                    ),
-            )
+            IconButton(onClick = onLongPress) {
+                Icon(Icons.Outlined.Edit, "编辑长期事项", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
                 } // closes inner Row (content row)
             } // closes inner Box (weight(1f) wrapper)
         } // closes outer Row (color strip + content)
@@ -641,7 +516,6 @@ private fun HabitMetaChip(text: String, tint: Color, icon: ImageVector) {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                 RoundedCornerShape(8.dp),
             )
-            .border(0.5.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -963,76 +837,28 @@ private fun YearHeatmapCanvas(
 @OptIn(ExperimentalMaterial3Api::class)
 private fun CelebrateSheet(stats: HabitStats, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState()
-    val particleProgress = remember { Animatable(0f) }
     val today = LocalDate.now(ZoneId.systemDefault())
-    LaunchedEffect(Unit) {
-        particleProgress.animateTo(
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1600, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart,
-            ),
-        )
-    }
+    val appearance = win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance.current
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Canvas(modifier = Modifier.size(220.dp)) {
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val count = 6
-                    val progress = particleProgress.value
-                    repeat(count) { i ->
-                        val angle = Math.PI * 2 * i / count
-                        val distance = 30f + progress * 90f
-                        val particleX = center.x + (Math.cos(angle) * distance).toFloat()
-                        val particleY = center.y + (Math.sin(angle) * distance).toFloat()
-                        drawCircle(
-                            color = Color(0xFFA4834E).copy(alpha = (1f - progress) * 0.8f),
-                            radius = (1f - progress) * 8f + 2f,
-                            center = Offset(particleX, particleY),
-                        )
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .size(96.dp)
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(Color(0xFFB4493E), Color(0xFF8C362E)),
-                            ),
-                            shape = CircleShape,
-                        )
-                        .border(3.dp, Color(0xFFA4834E), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "完",
-                        color = Color.White,
-                        fontWeight = FontWeight.Black,
-                        fontSize = 38.sp,
-                    )
-                }
+            if (appearance.showsFeedback) {
+                win.iqwqi.xiangece.ui.companion.CompanionSticker(
+                    win.iqwqi.xiangece.ui.companion.CompanionCue.HAPPY, Modifier.size(148.dp),
+                )
+            } else {
+                Text("✓", fontSize = 42.sp, color = MaterialTheme.colorScheme.primary)
             }
             Text("今日厚积已成", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(
-                "${today.year}年${today.monthValue}月${today.dayOfMonth}日",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
-            Text(
-                "共完成 ${stats.todayCompletedHabitIds.size} 项 · 连续坚持第 ${stats.currentStreak} 天",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                Text("继续坚持")
-            }
+            Text("${today.year}年${today.monthValue}月${today.dayOfMonth}日",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("共完成 ${stats.todayCompletedHabitIds.size} 项 · 连续坚持第 ${stats.currentStreak} 天",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("继续坚持") }
         }
     }
 }
@@ -1094,6 +920,7 @@ private fun HabitEditorDialog(
                 Box(
                     modifier = Modifier
                         .size(32.dp)
+                        .clip(CircleShape)
                         .background(Color(candidate), CircleShape)
                         .border(
                             width = if (color == candidate) 3.dp else 1.dp,

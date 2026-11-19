@@ -12,7 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowForward
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
+import win.iqwqi.xiangece.ui.components.AppTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,26 +46,27 @@ fun OnboardingScreen(
     ) {
         BrandHeader("弦歌册", "大学诸事，尽入一册。")
         PaperCard {
-            Text("先定下这学期")
-            Text("教学周是课表、通知识别和提醒的时间坐标。所有数据只保存在你的手机中。")
-            OutlinedTextField(
+            Text("先设置本学期", style = androidx.compose.material3.MaterialTheme.typography.titleLarge)
+            Text("设置好学期后，课表、周次和提醒就能准确安排。")
+            AppTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("学期名称") },
+                label = "学期名称",
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            OutlinedTextField(
+            AppTextField(
                 value = startDate,
                 onValueChange = { startDate = it },
-                label = { Text("第一周周一（yyyy-MM-dd）") },
+                label = "第一周周一",
+                supportingText = "例如：2026-09-01",
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            OutlinedTextField(
+            AppTextField(
                 value = weeks,
                 onValueChange = { weeks = it.filter(Char::isDigit) },
-                label = { Text("教学周数") },
+                label = "教学周数",
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )

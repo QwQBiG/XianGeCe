@@ -88,6 +88,38 @@ class CampusRepository @Inject constructor(
         dao.upsertTimetable((dao.allTimetables().firstOrNull { it.id == id } ?: return@withTransaction).copy(isCurrent = true))
     }
 
+    val calendarNotes = dao.observeCalendarNotes()
+
+    suspend fun saveCalendarNote(day: Long, text: String) {
+        java.time.LocalDate.ofEpochDay(day)
+        require(text.length <= 10_000) { "备注最多 10000 字" }
+        if (text.isBlank()) dao.deleteCalendarNote(day)
+        else dao.upsertCalendarNotes(listOf(win.iqwqi.xiangece.data.local.CalendarNoteEntity(day, text.trim())))
+    }
+
+    suspend fun deleteTimetable(id: Long): List<Long> = database.withTransaction {
+        val books = dao.allTimetables()
+        val target = books.firstOrNull { it.id == id } ?: return@withTransaction emptyList()
+        val replacement = books.firstOrNull { it.id != id }
+        val replacementId = replacement?.id
+            ?: dao.upsertTimetable(TimetableEntity(name = "默认课表", isCurrent = false))
+        val meetings = dao.meetingsInTimetable(id)
+        dao.coursesInTimetable(id).forEach {
+            dao.detachTasksFromCourse(it.id)
+            dao.detachRecordingsFromCourse(it.id)
+            dao.deleteCourse(it.id)
+        }
+        meetings.forEach { dao.deleteMeeting(it.id) }
+        dao.moveTimetableInbox(id, replacementId)
+        dao.deleteTimetable(id)
+        if (target.isCurrent) {
+            dao.clearCurrentTimetable()
+            val next = dao.allTimetables().first { it.id == replacementId }
+            dao.upsertTimetable(next.copy(isCurrent = true))
+        }
+        meetings.map { it.id }
+    }
+
     suspend fun renameTimetable(id: Long, name: String) = database.withTransaction {
         val timetable = dao.allTimetables().firstOrNull { it.id == id } ?: return@withTransaction
         dao.upsertTimetable(timetable.copy(name = name.trim().ifBlank { timetable.name }))
@@ -485,20 +517,23 @@ class CampusRepository @Inject constructor(
 
     suspend fun deleteEvent(id: Long) = dao.deleteEvent(id)
 
-    suspend fun updateTask(task: TaskEntity, title: String, dueAtEpochMillis: Long?) {
+    suspend fun updateTask(task: TaskEntity, title: String, dueAtEpochMillis: Long?, note: String) {
         dao.upsertTask(
             task.copy(
                 title = title.ifBlank { task.title },
                 dueAtEpochMillis = dueAtEpochMillis,
+                note = note.trim(),
             ),
         )
     }
 
-    suspend fun updateEvent(event: CampusEventEntity, title: String, startsAtEpochMillis: Long) {
+    suspend fun updateEvent(event: CampusEventEntity, title: String, startsAtEpochMillis: Long, location: String, note: String) {
         dao.upsertEvent(
             event.copy(
                 title = title.ifBlank { event.title },
                 startsAtEpochMillis = startsAtEpochMillis,
+                location = location.trim(),
+                note = note.trim(),
             ),
         )
     }
@@ -527,7 +562,10 @@ class CampusRepository @Inject constructor(
     )
 
     /** 恢复刚被删除的任务（保留原 id）。用于删除撤销。 */
-    suspend fun restoreTask(task: TaskEntity): Long = dao.upsertTask(task)
+    suspend fun restoreTask(task: TaskEntity): Long = database.withTransaction {
+        val courseId = task.courseId?.takeIf { dao.courseById(it) != null }
+        dao.upsertTask(task.copy(courseId = courseId))
+    }
 
     /** 恢复刚被删除的事件（保留原 id）。用于删除撤销。 */
     suspend fun restoreEvent(event: CampusEventEntity): Long = dao.upsertEvent(event)

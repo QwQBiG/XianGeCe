@@ -55,6 +55,7 @@ internal object DitingAiAnnotationParser {
                 note = item.note.trim().take(MAX_NOTE_CHARS),
                 evidence = evidence,
                 confidence = item.confidence.coerceIn(0f, 1f),
+                expectedTexts = segments.associate { it.sequence to it.text },
             )
         }.groupBy { it.type to it.sequence }
             .values
@@ -63,7 +64,7 @@ internal object DitingAiAnnotationParser {
             .take(MAX_RESULTS)
     }
 
-    private fun containsEvidence(text: String, evidence: String): Boolean {
+    internal fun containsEvidence(text: String, evidence: String): Boolean {
         if (text.contains(evidence)) return true
         val compactText = text.replace(Regex("\\s+"), "")
         val compactEvidence = evidence.replace(Regex("\\s+"), "")

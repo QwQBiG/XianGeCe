@@ -16,6 +16,7 @@ import win.iqwqi.xiangece.feature.diting.data.DitingSessionEntity
         CourseEntity::class,
         CourseMeetingEntity::class,
         TaskEntity::class,
+        CalendarNoteEntity::class,
         CampusEventEntity::class,
         InboxItemEntity::class,
         OcrSnapshotEntity::class,
@@ -30,7 +31,7 @@ import win.iqwqi.xiangece.feature.diting.data.DitingSessionEntity
         DitingSegmentEntity::class,
         DitingMarkerEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -40,6 +41,12 @@ abstract class XiangeceDatabase : RoomDatabase() {
     abstract fun ditingDao(): DitingDao
 
     companion object {
+        val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS calendar_notes (dateEpochDay INTEGER NOT NULL PRIMARY KEY, text TEXT NOT NULL)")
+            }
+        }
+
         val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE diting_segments ADD COLUMN errorMessage TEXT")

@@ -3,13 +3,16 @@ package win.iqwqi.xiangece.ui.screens
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,6 +22,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import android.content.Intent
@@ -50,9 +55,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,12 +68,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
@@ -80,14 +92,21 @@ import win.iqwqi.xiangece.data.local.InboxItemEntity
 import win.iqwqi.xiangece.data.local.ReminderEntity
 import win.iqwqi.xiangece.domain.model.InboxStatus
 import win.iqwqi.xiangece.core.ocr.OfflineOcrPackState
+import win.iqwqi.xiangece.core.ocr.OfflineOcrPackCatalog
 import win.iqwqi.xiangece.feature.diting.offline.DitingOfflinePackState
+import win.iqwqi.xiangece.feature.diting.offline.DitingOfflinePackCatalog
 import win.iqwqi.xiangece.ui.AppUiState
 import win.iqwqi.xiangece.ui.components.AppConfirmDialog
 import win.iqwqi.xiangece.ui.components.AppFormSheet
+import win.iqwqi.xiangece.ui.components.AppFullScreenSheet
 import win.iqwqi.xiangece.ui.components.AppTextField
 import win.iqwqi.xiangece.ui.components.BrandHeader
 import win.iqwqi.xiangece.ui.components.InkDivider
 import win.iqwqi.xiangece.ui.components.PaperCard
+import win.iqwqi.xiangece.ui.components.AppActionRow
+import win.iqwqi.xiangece.ui.components.AppActionGroup
+import win.iqwqi.xiangece.ui.components.SectionTitle
+import win.iqwqi.xiangece.ui.components.LocalPolicyButton
 
 private enum class MinePanel {
     LOGIN, AI, INFO, BACKUP, INBOX, QUOTES, REMINDERS, APPEARANCE, PRIVACY, RESOURCES, SHARE
@@ -114,7 +133,7 @@ fun SettingsScreen(
     onSavePeriod: (Int, String, String) -> Unit,
     onSaveTimetableLayout: (String, String, String) -> Unit,
     onSaveAi: (Boolean, String, String, String, String, String, Boolean, String) -> Unit,
-    onTestAi: (Boolean, String, String, String, String, String, Boolean, String) -> Unit,
+    onTestAi: suspend (Boolean, String, String, String, String, String, Boolean, String) -> Result<Unit>,
     onSaveDitingTranscription: (String, String) -> Unit,
     onSaveDitingAiAnnotation: (Boolean) -> Unit = {},
     onExport: () -> Unit,
@@ -128,6 +147,7 @@ fun SettingsScreen(
     onDeleteQuote: (Long) -> Unit,
     onSendTestNotification: () -> Unit,
     onSetThemeSeed: (String) -> Unit = {},
+    onOpenWardrobe: () -> Unit = {},
     onSetDarkMode: (Boolean) -> Unit = {},
     onSetFollowSystemTheme: (Boolean) -> Unit = {},
     onRegister: (String, String) -> Unit = { _, _ -> },
@@ -146,8 +166,18 @@ fun SettingsScreen(
     onCancelOfflineOcrPackDownload: () -> Unit = {},
     onDeleteOfflineOcrPack: () -> Unit = {},
     onImportOfflineOcrPack: () -> Unit = {},
+    onSelectOcrPack: (String) -> Unit = {},
+    onSelectDitingPack: (String) -> Unit = {},
+    requestedPanel: String? = null,
+    onPanelConsumed: () -> Unit = {},
 ) {
     var panel by remember { mutableStateOf<MinePanel?>(null) }
+    androidx.compose.runtime.LaunchedEffect(requestedPanel) {
+        if (requestedPanel != null) {
+            panel = when (requestedPanel) { "service" -> MinePanel.AI; "resources" -> MinePanel.RESOURCES; else -> panel }
+            onPanelConsumed()
+        }
+    }
     val latestInbox = state.inbox.firstOrNull()
     val isLoggedIn = state.settings.accountLoggedIn
     val accountEmail = state.settings.accountEmail
@@ -162,7 +192,7 @@ fun SettingsScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item { BrandHeader("我的", "账户、AI 与数据中心", icon = Icons.Outlined.Person) }
+        item { BrandHeader("我的", "管理偏好、提醒与个人数据", icon = Icons.Outlined.Person) }
 
         item {
             PaperCard {
@@ -189,7 +219,7 @@ fun SettingsScreen(
                                 }
                                 else -> {
                                     Text("未登录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                    Text("注册账号以启用个人空间", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("资料保存在这台设备上", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -207,96 +237,26 @@ fun SettingsScreen(
                 }
             }
         }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.SmartToy,
-                    title = "AI",
-                    subtitle = if (state.settings.aiEnabled) state.settings.aiProvider else "未启用",
-                    onClick = { panel = MinePanel.AI },
-                )
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.TextSnippet,
-                    title = "收件",
-                    subtitle = if (latestInbox == null) "暂无记录" else "${state.inbox.size} 条记录",
-                    onClick = { panel = MinePanel.INBOX },
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Save,
-                    title = "我的资源",
-                    subtitle = offlineResourceSummary(state.ditingOfflinePack.installed, state.offlineOcrPack.installed),
-                    onClick = { panel = MinePanel.RESOURCES },
-                )
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.CloudOff,
-                    title = "本地备份",
-                    subtitle = ".xiangece 导出恢复",
-                    onClick = { panel = MinePanel.BACKUP },
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Edit,
-                    title = "箴言",
-                    subtitle = if (state.customQuotes.isEmpty()) "内置箴言" else "${state.customQuotes.size} 条箴言",
-                    onClick = { panel = MinePanel.QUOTES },
-                )
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Info,
-                    title = "信息",
-                    subtitle = "关于与隐私说明",
-                    onClick = { panel = MinePanel.INFO },
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Notifications,
-                    title = "提醒",
-                    subtitle = "诊断与测试",
-                    onClick = { panel = MinePanel.REMINDERS },
-                )
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Palette,
-                    title = "外观",
-                    subtitle = "主题与深色模式",
-                    onClick = { panel = MinePanel.APPEARANCE },
-                )
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Lock,
-                    title = "隐私",
-                    subtitle = "权限与政策",
-                    onClick = { panel = MinePanel.PRIVACY },
-                )
-                MineTile(
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Outlined.Share,
-                    title = "转发",
-                    subtitle = "分享给同学",
-                    onClick = { panel = MinePanel.SHARE },
-                )
-            }
-        }
+        item { SectionTitle("日常与外观") }
+        item { AppActionGroup {
+            AppActionRow("外观与角色", "${state.settings.companion.outfit.label} · 主题与装扮", Icons.Outlined.Palette, { panel = MinePanel.APPEARANCE })
+            AppActionRow("提醒", "通知权限与提醒时间", Icons.Outlined.Notifications, { panel = MinePanel.REMINDERS })
+            AppActionRow("箴言", if (state.customQuotes.isEmpty()) "每日一句" else "${state.customQuotes.size} 条箴言", Icons.Outlined.Edit, { panel = MinePanel.QUOTES })
+        } }
+        item { SectionTitle("资料与服务", modifier = Modifier.padding(top = 8.dp)) }
+        item { AppActionGroup {
+            AppActionRow("收件箱", "${state.inbox.size} 条记录", Icons.Outlined.TextSnippet, { panel = MinePanel.INBOX })
+            AppActionRow("智能服务", if (state.settings.aiEnabled) state.settings.aiProvider else "未启用", Icons.Outlined.SmartToy, { panel = MinePanel.AI })
+            AppActionRow("离线资源", offlineResourceSummary(state.ditingOfflinePack.installedPackIds.size, state.offlineOcrPack.installedPackIds.size),
+                Icons.Outlined.Save, { panel = MinePanel.RESOURCES })
+            AppActionRow("本地备份", "导出或恢复个人数据", Icons.Outlined.CloudOff, { panel = MinePanel.BACKUP })
+        } }
+        item { SectionTitle("关于弦歌册", modifier = Modifier.padding(top = 8.dp)) }
+        item { AppActionGroup {
+            AppActionRow("隐私", "权限与数据说明", Icons.Outlined.Lock, { panel = MinePanel.PRIVACY })
+            AppActionRow("关于", "版本、帮助与说明", Icons.Outlined.Info, { panel = MinePanel.INFO })
+            AppActionRow("分享应用", "邀请同学一起使用", Icons.Outlined.Share, { panel = MinePanel.SHARE })
+        } }
     }
 
     when (panel) {
@@ -347,6 +307,7 @@ fun SettingsScreen(
         MinePanel.APPEARANCE -> AppearanceSheet(
             state = state,
             onSetThemeSeed = onSetThemeSeed,
+            onOpenWardrobe = { panel = null; onOpenWardrobe() },
             onSetDarkMode = onSetDarkMode,
             onSetFollowSystemTheme = onSetFollowSystemTheme,
             onDismiss = { panel = null },
@@ -365,18 +326,17 @@ fun SettingsScreen(
             onCancelOcr = onCancelOfflineOcrPackDownload,
             onDeleteOcr = onDeleteOfflineOcrPack,
             onImportOcr = onImportOfflineOcrPack,
+            onSelectOcrPack = onSelectOcrPack,
+            onSelectDitingPack = onSelectDitingPack,
             onDismiss = { panel = null },
         )
         null -> Unit
     }
 }
 
-private fun offlineResourceSummary(ditingInstalled: Boolean, ocrInstalled: Boolean): String = when {
-    ditingInstalled && ocrInstalled -> "语音、OCR 已安装"
-    ditingInstalled -> "语音已安装 · OCR 未安装"
-    ocrInstalled -> "OCR 已安装 · 语音未安装"
-    else -> "可选离线能力"
-}
+private fun offlineResourceSummary(ditingCount: Int, ocrCount: Int): String =
+    if (ditingCount + ocrCount == 0) "语音与 OCR · 按需安装"
+    else "已安装：语音 $ditingCount 包 · OCR $ocrCount 包"
 
 @Composable
 private fun MineTile(
@@ -506,10 +466,10 @@ private fun LoginSheet(
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun AiSheet(
+internal fun AiSheet(
     state: AppUiState,
     onSaveAi: (Boolean, String, String, String, String, String, Boolean, String) -> Unit,
-    onTestAi: (Boolean, String, String, String, String, String, Boolean, String) -> Unit,
+    onTestAi: suspend (Boolean, String, String, String, String, String, Boolean, String) -> Result<Unit>,
     onSaveDitingTranscription: (String, String) -> Unit,
     onSaveDitingAiAnnotation: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
@@ -522,19 +482,30 @@ private fun AiSheet(
     var authHeader by remember(state.settings.aiAuthHeader) { mutableStateOf(state.settings.aiAuthHeader) }
     var supportsVision by remember(state.settings.aiSupportsVision) { mutableStateOf(state.settings.aiSupportsVision) }
     var apiKey by remember { mutableStateOf("") }
+    var showConnectionOptions by remember { mutableStateOf(false) }
     var transcriptionModel by remember(state.settings.ditingTranscriptionModel) { mutableStateOf(state.settings.ditingTranscriptionModel) }
     var transcriptionEndpoint by remember(state.settings.ditingTranscriptionEndpoint) { mutableStateOf(state.settings.ditingTranscriptionEndpoint) }
     var aiAnnotationEnabled by remember(state.settings.ditingAiAnnotationEnabled) { mutableStateOf(state.settings.ditingAiAnnotationEnabled) }
     val providers = remember { aiProviderPresets() }
+    val scope = rememberCoroutineScope()
+    var testJob by remember { mutableStateOf<Job?>(null) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(aiEnabled, provider, baseUrl, model, visionModel, authHeader, supportsVision, apiKey) {
+        testJob?.cancel()
+        testing = false
+        testResult = null
+    }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(
             contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text("AI 服务", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text("联网增强解析与图片识别。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("智能服务", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("帮助你从通知、图片和课堂录音中整理信息。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
                 PaperCard {
@@ -544,8 +515,8 @@ private fun AiSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("启用 AI", fontWeight = FontWeight.Medium)
-                            Text("文本模型处理通知；视觉模型处理截图。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("启用云端服务", fontWeight = FontWeight.Medium)
+                            Text("使用你配置的服务识别和整理内容。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(aiEnabled, { aiEnabled = it })
                     }
@@ -553,9 +524,8 @@ private fun AiSheet(
             }
             item {
                 Text("服务商", fontWeight = FontWeight.SemiBold)
-                providers.chunked(3).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { preset ->
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        providers.forEach { preset ->
                             FilterChip(
                                 selected = provider == preset.name,
                                 onClick = {
@@ -565,35 +535,90 @@ private fun AiSheet(
                                     visionModel = preset.visionModel
                                     supportsVision = preset.supportsVision
                                     authHeader = preset.authHeader
+                                    preset.transcriptionModel?.let {
+                                        transcriptionModel = it
+                                        transcriptionEndpoint = preset.transcriptionEndpoint
+                                    }
                                 },
                                 label = { Text(preset.name) },
                             )
                         }
-                    }
                 }
             }
             item { OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("接口地址") }, modifier = Modifier.fillMaxWidth()) }
             item { OutlinedTextField(model, { model = it }, label = { Text("文本模型") }, modifier = Modifier.fillMaxWidth()) }
             item { OutlinedTextField(visionModel, { visionModel = it }, label = { Text("视觉模型（截图识别）") }, modifier = Modifier.fillMaxWidth()) }
-            item { OutlinedTextField(authHeader, { authHeader = it }, label = { Text("鉴权头，使用 {key}") }, modifier = Modifier.fillMaxWidth()) }
-            item { Text("谛听云端分段转写", fontWeight = FontWeight.SemiBold) }
+            if (provider == "通义千问") item {
+                Text("此预设使用百炼北京地域：文字、图片和 Fun-ASR 转写共用下方密钥。请在同一地域开通相应模型。",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                TextButton(onClick = { showConnectionOptions = !showConnectionOptions }) {
+                    Text(if (showConnectionOptions) "收起其他连接设置" else "其他连接设置")
+                }
+                if (showConnectionOptions) {
+                    OutlinedTextField(authHeader, { authHeader = it },
+                        label = { Text("身份验证格式") },
+                        supportingText = { Text("服务商未特别要求时保持默认。{key} 会自动替换为你填写的密钥。") },
+                        modifier = Modifier.fillMaxWidth())
+                }
+            }
+            item { Text("谛听云端转写", fontWeight = FontWeight.SemiBold) }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("谛听 AI 自动标注", fontWeight = FontWeight.Medium)
-                        Text("按批次分析转写文字，自动标出重点与提问；不会发送音频。未配置 AI 服务时不会产生请求，本地规则标注仍可用。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        Text("自动整理课堂重点", fontWeight = FontWeight.Medium)
+                        Text("将课堂文字发送到所选服务，帮助找出重点和提问。此功能只发送文字。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     }
                     Switch(aiAnnotationEnabled, { aiAnnotationEnabled = it })
                 }
             }
-            item { Text("没有可用的本地识别时，谛听会按音频片段使用你配置的转写服务；只有你主动开启相关功能后才会使用。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            item { OutlinedTextField(transcriptionModel, { transcriptionModel = it }, label = { Text("云端转写模型（例如 whisper-1）") }, modifier = Modifier.fillMaxWidth()) }
-            item { OutlinedTextField(transcriptionEndpoint, { transcriptionEndpoint = it }, label = { Text("联网转写地址（可选）") }, modifier = Modifier.fillMaxWidth()) }
+            item { Text("保存云端配置并开启本节课的“课堂文字记录”后，会优先上传音频进行识别。关闭文字记录时只保存录音。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                transcriptionModel = "fun-asr-realtime"
+                                transcriptionEndpoint = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Fun-ASR 预设") }
+                        OutlinedButton(
+                            onClick = {
+                                transcriptionModel = "whisper-1"
+                                transcriptionEndpoint = ""
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("通用服务预设") }
+                    }
+                    Text("点击预设只填写模型与转写地址，不修改密钥；点“保存”后生效。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            item { OutlinedTextField(transcriptionModel, { transcriptionModel = it }, label = { Text("云端转写模型") }, modifier = Modifier.fillMaxWidth()) }
+            item {
+                OutlinedTextField(
+                    transcriptionEndpoint, { transcriptionEndpoint = it },
+                    label = { Text("云端转写地址（可选）") },
+                    supportingText = {
+                        Text(if (transcriptionModel.trim().startsWith("fun-asr-realtime"))
+                            "留空使用阿里云北京地域的默认地址。"
+                        else "留空使用上方服务地址，也可填写服务商提供的转写地址。")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Text(
+                    "课堂转写使用下方密钥。请确认所选语音服务已开通且额度充足；阿里云其他地域需填写对应地址。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
-            item { Text("如果没有配置转写服务，仍然可以正常录音，并在之后补充文字。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+            item { Text("未配置云端时使用可用的本地识别。云端失败时会尝试已选的离线包；识别失败也不会中断原音保存。", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("支持多模态截图识别")
+                    Text("启用图片识别")
                     Switch(supportsVision, { supportsVision = it })
                 }
             }
@@ -608,12 +633,37 @@ private fun AiSheet(
                 )
             }
             item {
+                if (testing) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text("正在检查文字服务…", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+                }
+                testResult?.let {
+                    Text(it, Modifier.padding(bottom = 12.dp), style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
-                        onClick = { onTestAi(aiEnabled, provider, baseUrl, model, visionModel, authHeader, supportsVision, apiKey) },
+                        onClick = {
+                            if (testing) {
+                                testJob?.cancel()
+                                testing = false
+                                testResult = "已停止测试，设置尚未保存。"
+                            } else {
+                                testing = true
+                                testResult = null
+                                testJob = scope.launch {
+                                    try {
+                                        testResult = onTestAi(aiEnabled, provider, baseUrl, model, visionModel, authHeader, supportsVision, apiKey)
+                                            .fold({ "文字服务已连通。图片和课堂语音请分别试一次；设置需点击保存后生效。" },
+                                                { it.message ?: "连接未完成，请检查配置后重试。" })
+                                    } finally { testing = false }
+                                }
+                            }
+                        },
                         modifier = Modifier.weight(1f),
-                    ) { Text("测试连接") }
+                    ) { Text(if (testing) "停止测试" else "测试文字服务") }
                     Button(
+                        enabled = !testing,
                         onClick = {
                             onSaveAi(aiEnabled, provider, baseUrl, model, visionModel, authHeader, supportsVision, apiKey)
                             onSaveDitingTranscription(transcriptionModel, transcriptionEndpoint)
@@ -622,6 +672,9 @@ private fun AiSheet(
                         modifier = Modifier.weight(1f),
                     ) { Text("保存") }
                 }
+                Text("测试仅发送一条测试文字，不发送你的图片、录音或笔记。",
+                    Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -704,7 +757,7 @@ private fun BackupSheet(onExport: () -> Unit, onImport: () -> Unit, onDismiss: (
                     Icon(Icons.Outlined.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Column {
                         Text(".xiangece 本地文件", fontWeight = FontWeight.SemiBold)
-                        Text("不含 API 密钥；恢复后如需 AI，请重新填写密钥。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("备份不包含服务密钥；恢复后如需云端识别，请重新填写。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -740,7 +793,7 @@ private fun InfoSheet(onDismiss: () -> Unit) {
             PaperCard {
                 Text("简介", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
-                    "弦歌册是一款面向大学生的校园生活助手。课程表、通知、截图、课堂录音和日常计划，都可以在这里整理、提醒和回看；重要内容尽量留在你的设备上。",
+                    "弦歌册是一款面向大学生的校园生活助手。课程表、通知、截图、笔记、课堂录音和日常计划，都可以在这里整理、提醒和回看；重要内容尽量留在你的设备上。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -749,28 +802,31 @@ private fun InfoSheet(onDismiss: () -> Unit) {
                 Text(
                     "• 今日：查看当天安排、任务和提醒，快速知道接下来要做什么\n" +
                         "• 收件：接收分享来的文字和图片，确认后整理成日程、课程或备忘\n" +
-                        "• 课程：管理多套课表，按周查看课程，支持文件、图片和口令导入\n" +
+                        "• 课程：管理多套课表，按周或按天查看，支持文件、图片和口令导入\n" +
+                        "• 笔记库：编辑和预览 Markdown，收集资料、查找笔记，核对整理结果的来源\n" +
                         "• 谛听：录下课堂，实时或离线转成文字，回听重点片段和提问内容\n" +
                         "• 厚积：记录习惯、连续天数和每日坚持\n" +
-                        "• 百宝：成绩、课程时间、番茄钟、记账等常用工具\n" +
-                        "• 我的：管理 AI、离线资源、备份、外观、隐私和分享",
+                        "• 百宝：日历日程、成绩、课程时间、番茄钟、记账等常用工具\n" +
+                        "• 我的：管理智能服务、离线资源、备份、外观、隐私和分享",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             PaperCard {
                 Text("数据与账号", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
-                    "课程、任务、录音、转写和设置默认保存在这台设备上。离线语音识别和离线 OCR 需要你主动下载；AI 功能也只有在你主动配置和使用时才会联网。",
+                    "课程、任务、录音、文字和设置默认保存在这台设备上。离线识别资源可按需下载；云端识别仅在你配置并授权使用时发送内容。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             PaperCard {
-                Text("开源协议", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Text("软件与素材许可", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
-                    "本应用基于 GPL-3.0 协议开源。你可以自由使用、修改与学习源码；任何衍生作品须同样以 GPL-3.0 开源并保留版权声明。",
+                    "自有源码采用 Apache-2.0。原创角色与品牌美术归 QwQBiG 所有，保留所有权利。图片范围、历史授权和第三方许可可在下方查看。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            LocalPolicyButton("使用说明", "license.txt")
+            LocalPolicyButton("第三方组件说明", "third-party.txt")
             PaperCard {
                 Text("官方网站与文档", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
@@ -782,13 +838,13 @@ private fun InfoSheet(onDismiss: () -> Unit) {
                     },
                 )
                 Text(
-                    "应用介绍、使用文档与完整隐私政策均发布于此。",
+                    "查看应用介绍与联系方式。使用说明也可以在应用内离线阅读。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Text(
-                "权限、录音、离线识别和 AI 数据处理说明见「我的 → 隐私」。完整说明和联系方式请打开上方网页。",
+                "权限、录音、离线识别和联网数据处理说明见「我的 → 隐私」。使用说明与隐私政策均可离线阅读。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -815,6 +871,8 @@ private data class AiProviderPreset(
     val visionModel: String,
     val supportsVision: Boolean,
     val authHeader: String = "Authorization: Bearer {key}",
+    val transcriptionModel: String? = null,
+    val transcriptionEndpoint: String = "",
 )
 
 private fun aiProviderPresets() = listOf(
@@ -822,7 +880,8 @@ private fun aiProviderPresets() = listOf(
     AiProviderPreset("OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4.1-mini", "openai/gpt-4.1-mini", true),
     AiProviderPreset("硅基流动", "https://api.siliconflow.cn/v1", "Qwen/Qwen3-32B", "Qwen/Qwen2.5-VL-32B-Instruct", true),
     AiProviderPreset("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "", false),
-    AiProviderPreset("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "qwen-vl-plus", true),
+    AiProviderPreset("通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "qwen-vl-plus", true,
+        transcriptionModel = "fun-asr-realtime", transcriptionEndpoint = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"),
     AiProviderPreset("智谱", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash", "glm-4v-flash", true),
     AiProviderPreset("火山方舟", "https://ark.cn-beijing.volces.com/api/v3", "doubao-lite-32k", "doubao-vision-lite-32k", true),
     AiProviderPreset("自定义", "", "", "", false),
@@ -1221,22 +1280,24 @@ private fun ReminderDiagnosticItem(reminder: ReminderEntity) {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun AppearanceSheet(
+internal fun AppearanceSheet(
     state: AppUiState,
     onSetThemeSeed: (String) -> Unit,
+    onOpenWardrobe: () -> Unit,
     onSetDarkMode: (Boolean) -> Unit,
     onSetFollowSystemTheme: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val themeSeeds = win.iqwqi.xiangece.ui.theme.themeSeeds
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    AppFullScreenSheet("外观与角色", onDismiss) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize().testTag("appearance-scroll").verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("外观设置", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            OutlinedButton(onClick = onOpenWardrobe, modifier = Modifier.fillMaxWidth()) {
+                Text("角色衣橱 · ${state.settings.companion.outfit.label}")
+            }
 
             Text(
                 when {
@@ -1248,14 +1309,16 @@ private fun AppearanceSheet(
                 color = MaterialTheme.colorScheme.primary,
             )
             PaperCard {
-                Text("选择应用自己的外观，不会自动读取手机模式", style = MaterialTheme.typography.titleMedium)
+                Text("显示模式", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "只有选择“跟随系统”时，才会根据手机的浅色/深色模式切换。",
+                    "选择固定外观，或随手机切换深浅模式。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     FilterChip(
@@ -1265,7 +1328,7 @@ private fun AppearanceSheet(
                             onSetDarkMode(false)
                         },
                         label = { Text("浅色") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.height(48.dp),
                     )
                     FilterChip(
                         selected = !state.settings.followSystemTheme && state.settings.darkMode,
@@ -1274,62 +1337,22 @@ private fun AppearanceSheet(
                             onSetDarkMode(true)
                         },
                         label = { Text("深色") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.height(48.dp),
                     )
                     FilterChip(
                         selected = state.settings.followSystemTheme,
                         onClick = { onSetFollowSystemTheme(true) },
                         label = { Text("跟随系统") },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.height(48.dp),
                     )
                 }
             }
 
-            // 主题色选择
-            Text("主题色", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().height(280.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(themeSeeds) { seed ->
-                    val isSelected = seed.id == state.settings.themeSeed
-                    PaperCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSetThemeSeed(seed.id) },
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(seed.lightPrimary),
-                                )
-                                Text(
-                                    seed.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                )
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    Icons.Outlined.Check,
-                                    contentDescription = "已选择",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            win.iqwqi.xiangece.ui.companion.ThemePaletteChoices(
+                selectedId = state.settings.themeSeed,
+                custom = state.settings.companion.palette == win.iqwqi.xiangece.data.settings.CompanionPalette.CUSTOM,
+                onSelect = onSetThemeSeed,
+            )
         }
     }
 }
@@ -1448,9 +1471,9 @@ private fun PrivacySheet(onDismiss: () -> Unit) {
             }
 
             PaperCard {
-                Text("AI 识别与数据处理", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Text("云端识别与数据处理", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
-                    "AI 功能默认关闭。开启后，只有在你主动使用文字整理、图片识别、课堂转写或自动标注时，才会把必要内容发送到你填写的服务商；音频不会因为打开页面而自动上传。",
+                    "云端服务默认关闭。开启后，只有在你主动使用文字整理、图片识别、课堂转写或重点整理时，才会把必要内容发送到你填写的服务商；音频不会因为打开页面而自动上传。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1459,7 +1482,7 @@ private fun PrivacySheet(onDismiss: () -> Unit) {
             PaperCard {
                 Text("备份与导出", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
-                    "Android 自动云备份已被禁用。你可主动导出包含收件图片副本的本地 .xiangece 备份并自行保管；也可随时删除应用以彻底清除所有本地数据。",
+                    "Android 自动云备份已被禁用。你可主动导出包含收件图片副本的本地 .xiangece 备份并自行保管；卸载会清除应用私有数据，已导出或分享的副本需要另行删除。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1471,7 +1494,7 @@ private fun PrivacySheet(onDismiss: () -> Unit) {
                     "1. 不主动收集你的个人身份信息\n" +
                         "2. 课程、任务、录音和设置默认保存在本机\n" +
                         "3. 离线识别不需要把内容上传到云端\n" +
-                        "4. AI 只有在你主动配置和使用时才会发送必要内容\n" +
+                        "4. 云端服务只有在你主动配置和使用时才会发送必要内容\n" +
                         "5. 录音只在你主动开始后进行，并显示系统状态\n" +
                         "6. 你可以随时导出或删除自己的数据",
                     style = MaterialTheme.typography.bodySmall,
@@ -1479,8 +1502,9 @@ private fun PrivacySheet(onDismiss: () -> Unit) {
                 )
             }
 
+            LocalPolicyButton("阅读完整隐私政策", "privacy.txt")
             PaperCard {
-                Text("完整隐私政策", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Text("联系与网站说明", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(
                     XIANGECE_PUBLIC_URL,
                     color = MaterialTheme.colorScheme.primary,
@@ -1490,7 +1514,7 @@ private fun PrivacySheet(onDismiss: () -> Unit) {
                     },
                 )
                 Text(
-                    "最新完整的隐私政策与使用文档发布于此网址，如有更新以网页版本为准。",
+                    "隐私政策可以在应用内离线阅读。如有疑问，可通过网站联系。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1513,9 +1537,14 @@ private fun OfflineResourcesSheet(
     onCancelOcr: () -> Unit,
     onDeleteOcr: () -> Unit,
     onImportOcr: () -> Unit,
+    onSelectOcrPack: (String) -> Unit,
+    onSelectDitingPack: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1534,6 +1563,8 @@ private fun OfflineResourcesSheet(
                 onCancelOcr = onCancelOcr,
                 onDeleteOcr = onDeleteOcr,
                 onImportOcr = onImportOcr,
+                onSelectOcrPack = onSelectOcrPack,
+                onSelectDitingPack = onSelectDitingPack,
             )
             OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                 Text("完成")
@@ -1554,18 +1585,106 @@ private fun OfflineResourcesCard(
     onCancelOcr: () -> Unit,
     onDeleteOcr: () -> Unit,
     onImportOcr: () -> Unit,
+    onSelectOcrPack: (String) -> Unit,
+    onSelectDitingPack: (String) -> Unit,
 ) {
-    PaperCard {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("我的资源", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(
-                if (ditingPack.bundled || ocrPack.bundled) "此安装包已内置离线资源；点“安装”即可使用，无需联网。"
-                else "可选的免费离线能力；安装后无需联网，也可以导入资源包。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("我的资源", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            "按需下载或导入，选择适合你的识别方式。",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        PaperCard {
+            Text("图片文字识别 · OCR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("用于课表、通知和日常事项的图片文字识别。", style = MaterialTheme.typography.bodySmall)
+            OfflineResourceChoices(
+                choices = OfflineOcrPackCatalog.packs.map { OfflineResourceChoice(it.id, it.title, it.description, it.totalBytes) },
+                selectedId = ocrPack.selectedPackId,
+                installedIds = ocrPack.installedPackIds,
+                enabled = !ocrPack.downloading,
+                onSelect = onSelectOcrPack,
             )
-            OfflineResourceRow("中文/英文离线语音识别", "谛听课堂转写 · 中文优先，支持 English 与中英混合 · 约 237 MB", ditingPack.installed, ditingPack.bundled, ditingPack.downloading, ditingPack.paused, ditingPack.progress, ditingPack.currentFile, ditingPack.errorMessage, onDownloadDiting, onCancelDiting, onDeleteDiting, onImportDiting)
-            OfflineResourceRow("中文离线 OCR", "图片与课表识别 · 约 21.5 MB", ocrPack.installed, ocrPack.bundled, ocrPack.downloading, ocrPack.paused, ocrPack.progress, ocrPack.currentFile, ocrPack.errorMessage, onDownloadOcr, onCancelOcr, onDeleteOcr, onImportOcr)
+            OfflineResourceRow(
+                title = "当前选择：${OfflineOcrPackCatalog.find(ocrPack.selectedPackId)?.title.orEmpty()}",
+                subtitle = if (ocrPack.installed) "已准备好，可在本机识别图片。"
+                    else "下载或导入后，即可在本机识别图片。",
+                installed = ocrPack.installed, bundled = ocrPack.bundled,
+                downloading = ocrPack.downloading, paused = ocrPack.paused,
+                progress = ocrPack.progress, currentFile = ocrPack.currentFile, errorMessage = ocrPack.errorMessage,
+                onDownload = onDownloadOcr, onCancel = onCancelOcr, onDelete = onDeleteOcr, onImport = onImportOcr,
+            )
+        }
+        PaperCard {
+            Text("课堂语音识别", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("开启课堂文字记录并配置云端后优先使用云端；本地转写使用当前选中的已安装包。", style = MaterialTheme.typography.bodySmall)
+            OfflineResourceChoices(
+                choices = DitingOfflinePackCatalog.packs.map { OfflineResourceChoice(it.id, it.title, it.description, it.totalBytes) },
+                selectedId = ditingPack.selectedPackId,
+                installedIds = ditingPack.installedPackIds,
+                enabled = !ditingPack.downloading,
+                onSelect = onSelectDitingPack,
+            )
+            OfflineResourceRow(
+                title = "当前选择：${DitingOfflinePackCatalog.find(ditingPack.selectedPackId)?.title.orEmpty()}",
+                subtitle = if (ditingPack.installed) "已准备好，可在本机将录音转成文字。"
+                    else "下载或导入后，即可在本机将录音转成文字。",
+                installed = ditingPack.installed, bundled = ditingPack.bundled,
+                downloading = ditingPack.downloading, paused = ditingPack.paused,
+                progress = ditingPack.progress, currentFile = ditingPack.currentFile, errorMessage = ditingPack.errorMessage,
+                onDownload = onDownloadDiting, onCancel = onCancelDiting, onDelete = onDeleteDiting, onImport = onImportDiting,
+            )
+        }
+        Text(
+            "已有配套资源包时，可直接导入 ZIP 文件。安装时请留足存储空间；下载和删除只针对当前选择。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private data class OfflineResourceChoice(val id: String, val title: String, val description: String, val totalBytes: Long)
+
+@Composable
+private fun OfflineResourceChoices(
+    choices: List<OfflineResourceChoice>,
+    selectedId: String,
+    installedIds: Set<String>,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        choices.forEach { choice ->
+            val selected = choice.id == selectedId
+            val installed = choice.id in installedIds
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                    .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = { onSelect(choice.id) })
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = selected, onClick = null, enabled = enabled)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(choice.title, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(choice.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        listOfNotNull(
+                            android.text.format.Formatter.formatShortFileSize(context, choice.totalBytes),
+                            if (installed) "已安装" else "未安装",
+                            "当前选择".takeIf { selected },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (!enabled) {
+            Text("正在处理当前资源，完成或暂停后可切换。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1587,31 +1706,28 @@ private fun OfflineResourceRow(
     onImport: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Medium)
-                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             when {
-                installed -> {
-                    Text("已安装", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onDelete) { Text("删除") }
-                }
                 downloading -> Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                installed -> TextButton(onClick = onDelete) { Text("删除当前包") }
                 paused -> Text("已暂停", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 bundled -> Text("已内置", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
                 else -> Text("未安装", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
         }
+        if (!errorMessage.isNullOrBlank()) {
+            Text(errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
         when {
             downloading -> {
                 LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                Text("正在${if (bundled) "安装" else "下载"}${if (currentFile.isBlank()) "" else "：$currentFile"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                Text("正在处理${if (currentFile.isBlank()) "" else "：$currentFile"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(if (bundled) "取消安装" else "暂停下载") }
             }
             paused -> OfflineResourceActions(if (bundled) "继续安装" else "继续下载", onDownload, onImport)
             !installed && !errorMessage.isNullOrBlank() -> {
-                Text("${if (bundled) "安装" else "下载"}失败：$errorMessage", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 OfflineResourceActions(if (bundled) "重新安装" else "重试下载", onDownload, onImport)
             }
             !installed -> OfflineResourceActions(if (bundled) "安装" else "下载", onDownload, onImport)

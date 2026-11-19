@@ -16,8 +16,10 @@ android {
         applicationId = "win.iqwqi.xiangece"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.0.1"
+        versionCode = 10005
+        versionName = "1.0.0-preview.5"
+        // Preview builds use manual installation and do not poll the legacy update feed.
+        buildConfigField("boolean", "LEGACY_UPDATE_FEED_ENABLED", "false")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -35,6 +37,9 @@ android {
                 storePassword = providers.environmentVariable("XIANGECE_STORE_PASSWORD").orNull
                 keyAlias = providers.environmentVariable("XIANGECE_KEY_ALIAS").orNull
                 keyPassword = providers.environmentVariable("XIANGECE_KEY_PASSWORD").orNull
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -113,10 +118,15 @@ dependencies {
     implementation(libs.pdfbox.android)
     implementation(libs.accompanist.swiperefresh)
     implementation(libs.onnxruntime.android)
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
     implementation(files("libs/opencv-4.10.0.aar"))
     implementation(files("libs/sherpa-onnx-1.13.4-no-ort.aar"))
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

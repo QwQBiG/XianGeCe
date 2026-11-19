@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <files-path
+        name="notebook_source_image"
+        path="inbox/" />
+    <files-path
         name="diting_audio"
         path="diting/" />
     <cache-path

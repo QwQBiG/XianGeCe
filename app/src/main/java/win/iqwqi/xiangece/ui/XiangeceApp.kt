@@ -1,16 +1,18 @@
 package win.iqwqi.xiangece.ui
 
 import android.Manifest
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
+import win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,9 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesomeMosaic
 import androidx.compose.material.icons.outlined.AutoGraph
@@ -61,23 +60,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import win.iqwqi.xiangece.ui.components.AppSnackbar
+import win.iqwqi.xiangece.ui.companion.CompanionFeedbackHost
+import win.iqwqi.xiangece.ui.companion.CompanionWorking
+import win.iqwqi.xiangece.ui.companion.WardrobeSheet
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import win.iqwqi.xiangece.ui.components.MessageType
 import win.iqwqi.xiangece.ui.screens.CoursesScreen
 import win.iqwqi.xiangece.ui.screens.DraftEditorDialog
@@ -88,6 +84,11 @@ import win.iqwqi.xiangece.ui.screens.SettingsScreen
 import win.iqwqi.xiangece.ui.screens.TodayScreen
 import win.iqwqi.xiangece.ui.screens.TimetableEditorDialog
 import win.iqwqi.xiangece.ui.screens.ToolboxScreen
+import win.iqwqi.xiangece.ui.screens.CalendarScreen
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.graphicsLayer
 
 private data class Destination(
     val route: String,
@@ -106,10 +107,47 @@ private val destinations = listOf(
 @Composable
 fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int = 0) {
     val snackbar = remember { SnackbarHostState() }
+    var showWardrobe by remember { mutableStateOf(false) }
+    var showCalendar by rememberSaveable { mutableStateOf(false) }
+    var settingsEntry by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(showCalendar) { showCalendar = false }
+    val companionPaused by viewModel.companionPaused.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var imageUseCloud by rememberSaveable { mutableStateOf(true) }
+    var imageIsTimetable by rememberSaveable { mutableStateOf(false) }
+    var pendingCloudImage by remember { mutableStateOf<android.net.Uri?>(null) }
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
-    ) { it?.let(viewModel::importImage) }
+    ) { uri ->
+        if (uri != null) {
+            if (imageUseCloud && state.settings.aiEnabled && state.settings.aiBaseUrl.isNotBlank() &&
+                (!imageIsTimetable || (state.settings.aiSupportsVision && state.settings.aiVisionModel.isNotBlank()))) pendingCloudImage = uri
+            else if (imageIsTimetable) viewModel.importTimetableImage(uri)
+            else viewModel.importImage(uri)
+        }
+    }
+    pendingCloudImage?.let { uri ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingCloudImage = null },
+            title = { Text(if (imageIsTimetable) "使用云端识别这张课表？" else "使用云端整理这张图片？") },
+            text = { Text(
+                "服务：${state.settings.aiProvider}\n地址：${state.settings.aiBaseUrl}\n" +
+                    if (state.settings.aiSupportsVision && state.settings.aiVisionModel.isNotBlank())
+                        "确认后发送这张图片给上述服务；结果仍需你核对后写入。"
+                    else "确认后先在本机识字，再发送识别文字整理事项；原图留在本机。",
+            ) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                pendingCloudImage = null
+                if (imageIsTimetable) viewModel.importTimetableImage(uri, state.settings.aiBaseUrl)
+                else viewModel.importImage(uri, state.settings.aiBaseUrl)
+            }) { Text("同意并整理") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = {
+                pendingCloudImage = null
+                if (imageIsTimetable) viewModel.importTimetableImage(uri)
+                else viewModel.importImage(uri)
+            }) { Text("仅本地") } },
+        )
+    }
     val timetablePdfTablePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { it?.let { uri -> viewModel.importTimetableFile(uri, "pdf_table") } }
@@ -147,14 +185,6 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
             else viewModel.messages.tryEmit("通知权限未开启，测试通知无法发送")
         }
     }
-    var showStartupSplash by remember { mutableStateOf(true) }
-
-    LaunchedEffect(Unit) {
-        // 留出 splash 淡入动画时间即可，避免过长的固定延迟拖慢冷启动
-        delay(760)
-        showStartupSplash = false
-    }
-
     LaunchedEffect(Unit) {
         viewModel.messages.collectLatest { message ->
             val undo = viewModel.pendingUndo.value
@@ -211,7 +241,6 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                     onComplete = viewModel::completeOnboarding,
                 )
             }
-            XiangeceSplash(showStartupSplash)
         }
         return
     }
@@ -220,10 +249,13 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
     var courseNavExpanded by remember { mutableStateOf(true) }
     val currentPage by remember { derivedStateOf { pagerState.currentPage } }
     val scope = rememberCoroutineScope()
+    var handledEntryPage by rememberSaveable { mutableStateOf(initialPage) }
     LaunchedEffect(initialPage) {
+        if (handledEntryPage == initialPage) return@LaunchedEffect
+        handledEntryPage = initialPage
         val target = initialPage.coerceIn(0, destinations.lastIndex)
         if (pagerState.currentPage != target) {
-            pagerState.animateScrollToPage(target)
+            pagerState.scrollToPage(target)
         }
     }
 
@@ -321,7 +353,9 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                 }
             },
             bottomBar = {
-                if (currentPage == 2 && !courseNavExpanded) {
+                if (showCalendar) {
+                    Spacer(Modifier.height(0.dp))
+                } else if (currentPage == 2 && !courseNavExpanded) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -369,7 +403,7 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                                             courseNavExpanded = false
                                         } else {
                                             scope.launch {
-                                                pagerState.animateScrollToPage(index)
+                                                pagerState.scrollToPage(index)
                                             }
                                         }
                                     },
@@ -387,19 +421,25 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                 }
             },
         ) { padding ->
+            Box(Modifier.fillMaxSize()) {
             @OptIn(ExperimentalFoundationApi::class)
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().then(if (showCalendar)
+                    Modifier.graphicsLayer { alpha = 0f }.clearAndSetSemantics {} else Modifier),
                 // 课程页会在课表实际超出屏幕宽度时自行接管横滑；其余位置仍可切换主页面。
                 beyondViewportPageCount = 1,
-                userScrollEnabled = true,
+                userScrollEnabled = !showCalendar,
             ) { page ->
                 when (page) {
                     0 -> TodayScreen(
                         state = state,
                         contentPadding = padding,
                         onToggleTask = viewModel::toggleTask,
+                        onOpenWardrobe = { showWardrobe = true },
+                        onGreetCompanion = viewModel::greetCompanion,
+                        companionPaused = companionPaused,
+                        companionActive = currentPage == 0 && !showCalendar && !showWardrobe,
                         onUpdateTask = viewModel::updateTask,
                         onUpdateEvent = viewModel::updateEvent,
                         onCreateTask = viewModel::createTask,
@@ -421,6 +461,11 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         contentPadding = padding,
                         onSaveCourse = viewModel::saveCourse,
                         onDeleteMeeting = viewModel::deleteCourseMeeting,
+                        onPickTimetableImage = {
+                            imageIsTimetable = true
+                            imageUseCloud = true
+                            imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
                         onPickTimetablePdfTable = {
                             timetablePdfTablePicker.launch(arrayOf("application/pdf"))
                         },
@@ -445,6 +490,7 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         onCreateTimetable = viewModel::createTimetable,
                         onSwitchTimetable = viewModel::switchTimetable,
                         onRenameTimetable = viewModel::renameTimetable,
+                        onDeleteTimetable = viewModel::deleteTimetable,
                         onSaveTimetableLayout = viewModel::saveTimetableLayout,
                         onSavePeriod = viewModel::savePeriod,
                         onPickWallpaper = {
@@ -456,10 +502,13 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         onSaveBackgroundOptions = viewModel::saveTimetableBackgroundOptions,
                     )
                     3 -> ToolboxScreen(
+                        onOpenCalendar = { showCalendar = true },
                         state = state,
                         contentPadding = padding,
                         onParseText = viewModel::parseToolText,
-                        onPickImage = {
+                        onPickImage = { useCloud ->
+                            imageIsTimetable = false
+                            imageUseCloud = useCloud
                             imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
                         onSavePeriod = viewModel::savePeriod,
@@ -467,11 +516,14 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         onDeleteGrade = viewModel::deleteGrade,
                         onSaveGradePreferences = viewModel::saveGradePreferences,
                         onOpenAiSettings = {
+                            settingsEntry = "service"
                             scope.launch { pagerState.animateScrollToPage(4) }
                         },
-                         onOpenResources = { scope.launch { pagerState.animateScrollToPage(4) } },
+                         onOpenResources = { settingsEntry = "resources"; scope.launch { pagerState.animateScrollToPage(4) } },
                     )
                     4 -> SettingsScreen(
+                        requestedPanel = settingsEntry,
+                        onPanelConsumed = { settingsEntry = null },
                         state = state,
                         contentPadding = padding,
                         onSaveSemester = viewModel::saveSemester,
@@ -483,11 +535,15 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         onSaveTimetableLayout = viewModel::saveTimetableLayout,
                         onSaveAi = viewModel::saveAiSettings,
                         onTestAi = viewModel::testAiConnection,
+                        onSelectOcrPack = viewModel::selectOcrPack,
+                        onSelectDitingPack = viewModel::selectDitingPack,
                         onSaveDitingTranscription = viewModel::saveDitingTranscription,
                         onSaveDitingAiAnnotation = viewModel::saveDitingAiAnnotation,
                         onExport = { exportLauncher.launch("弦歌册-${java.time.LocalDate.now()}.xiangece") },
                         onImport = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
                         onPickImage = {
+                            imageUseCloud = true
+                            imageIsTimetable = false
                             imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                         },
                         onOpenInbox = viewModel::openInbox,
@@ -498,6 +554,7 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                         onDeleteQuote = viewModel::deleteCustomQuote,
                         onSendTestNotification = viewModel::sendTestNotification,
                         onSetThemeSeed = viewModel::setThemeSeed,
+                        onOpenWardrobe = { showWardrobe = true },
                         onSetDarkMode = viewModel::setDarkMode,
                         onSetFollowSystemTheme = viewModel::setFollowSystemTheme,
                         onRegister = viewModel::registerAccount,
@@ -523,10 +580,34 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
                     )
                 }
             }
+            val sceneDuration = if (LocalCompanionAppearance.current.motionEnabled) 200 else 0
+            AnimatedVisibility(
+                visible = showCalendar,
+                enter = fadeIn(tween(sceneDuration)) + slideInHorizontally(tween(sceneDuration)) { it / 14 },
+                exit = fadeOut(tween(sceneDuration)) + slideOutHorizontally(tween(sceneDuration)) { it / 14 },
+            ) {
+                val calendarNotes by viewModel.calendarNotes.collectAsStateWithLifecycle()
+                CalendarScreen(state, calendarNotes, onBack = { showCalendar = false },
+                    onSaveNote = viewModel::saveCalendarNote,
+                    onCreateTask = viewModel::createTask, onUpdateTask = viewModel::updateTask,
+                    onToggleTask = viewModel::toggleTask, onDeleteTask = viewModel::deleteTask,
+                    onUpdateEvent = viewModel::updateEvent)
+            }
+            }
         }
-        XiangeceSplash(showStartupSplash)
+        CompanionFeedbackHost(
+            events = viewModel.companionEvents,
+            page = currentPage,
+            paused = companionPaused,
+            obscured = showCalendar || showWardrobe || state.isWorking || state.editor != null || state.timetableEditor != null,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 96.dp),
+        )
     }
 
+    if (showWardrobe) {
+        WardrobeSheet(state.settings.companion, state.settings.themeSeed, viewModel::saveCompanion,
+            onDismiss = { showWardrobe = false }, motionAllowed = !companionPaused)
+    }
     state.editor?.let {
         DraftEditorDialog(
             editor = it,
@@ -563,80 +644,9 @@ fun XiangeceRoot(state: AppUiState, viewModel: MainViewModel, initialPage: Int =
     }
     if (state.isWorking) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-    }
-}
-
-@Composable
-private fun XiangeceSplash(visible: Boolean) {
-    var splashEntered by remember { mutableStateOf(false) }
-    LaunchedEffect(visible) {
-        if (visible) {
-            splashEntered = false
-            delay(40)
-            splashEntered = true
-        }
-    }
-    val iconScale by animateFloatAsState(
-        targetValue = if (splashEntered) 1f else 0.72f,
-        animationSpec = tween(560),
-        label = "xiangeceSplashScale",
-    )
-    val iconAlpha by animateFloatAsState(
-        targetValue = if (splashEntered) 1f else 0f,
-        animationSpec = tween(420),
-        label = "xiangeceSplashAlpha",
-    )
-    val iconRotation by animateFloatAsState(
-        targetValue = if (splashEntered) 0f else -5f,
-        animationSpec = tween(560),
-        label = "xiangeceSplashRotation",
-    )
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(),
-        exit = fadeOut(),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                modifier = Modifier.padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Image(
-                    painter = painterResource(win.iqwqi.xiangece.R.drawable.ic_launcher_splash),
-                    contentDescription = "弦歌册",
-                    modifier = Modifier
-                        .size(128.dp)
-                        .scale(iconScale)
-                        .rotate(iconRotation)
-                        .clip(CircleShape)
-                        .alpha(iconAlpha),
-                )
-                Spacer(Modifier.height(18.dp))
-                Text(
-                    text = "弦歌册",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 28.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .size(width = 48.dp, height = 2.dp)
-                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50)),
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "大学诸事，尽入一册",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp,
-                )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (!companionPaused && currentPage != 2) CompanionWorking(state.isWorking)
+                CircularProgressIndicator()
             }
         }
     }

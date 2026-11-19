@@ -1,23 +1,27 @@
 package win.iqwqi.xiangece.feature.diting.offline
 
-import com.k2fsa.sherpa.onnx.OnlineModelConfig
-import com.k2fsa.sherpa.onnx.OnlineParaformerModelConfig
-import com.k2fsa.sherpa.onnx.OnlineRecognizer
-import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import java.io.File
-import java.io.FileInputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** Result of the on-device Paraformer pass. */
+/** Timing is relative to this PCM segment, never an absolute recording timestamp. */
 data class DitingOfflineTranscript(
     val text: String,
     val language: String = "zh/en",
     val confidence: Float? = null,
+    val durationMillis: Long = 0,
+    val modelPackId: String = DitingOfflinePackCatalog.CHINESE_PARAFORMER_ID,
+    val tokens: List<String> = emptyList(),
+    val tokenTimestampsMillis: List<Long> = emptyList(),
+    val timestampsEstimated: Boolean = true,
 )
 
 @Singleton
@@ -25,129 +29,106 @@ class DitingOfflineTranscriber @Inject constructor(
     private val packManager: DitingOfflinePackManager,
 ) {
     private val recognizerMutex = Mutex()
-    private var recognizer: OnlineRecognizer? = null
-    private var recognizerDirectory: String? = null
+    private var recognizer: DitingOfflineRuntime? = null
+    private var recognizerKey: String? = null
     fun isConfigured(): Boolean = packManager.isChinesePackInstalled()
 
     /** Loads the native model before the first classroom segment arrives. */
-    suspend fun prepare(): Result<Unit> = withContext(Dispatchers.Default) {
-        runCatching {
-            check(isConfigured()) { "中文/英文离线识别包尚未安装" }
-            recognizerMutex.withLock { getOrCreateRecognizer(packManager.modelDirectory()); Unit }
-        }.also { result ->
-            if (result.isFailure) releaseAfterFailure()
+    suspend fun prepare(glossary: String = ""): Result<Unit> = withContext(Dispatchers.Default) {
+        var result = prepareOnce(glossary)
+        if (result.isFailure && result.exceptionOrNull() !is OutOfMemoryError && isConfigured()) {
+            // ONNX 资源正在释放时可能出现瞬时初始化失败，只做一次有界重试。
+            delay(PREPARE_RETRY_DELAY_MILLIS)
+            result = prepareOnce(glossary)
         }
-    }
-
-    suspend fun transcribe(audioFile: File, glossary: String): Result<DitingOfflineTranscript> = withContext(Dispatchers.Default) {
-        val result = runCatching {
-            check(isConfigured()) { "中文/英文离线识别包尚未安装" }
-            check(audioFile.isFile) { "音频分段不存在" }
-            val modelDir = packManager.modelDirectory()
-            recognizerMutex.withLock {
-                val activeRecognizer = getOrCreateRecognizer(modelDir)
-                val stream = activeRecognizer.createStream(glossaryToHotwords(glossary))
-                try {
-                    feedWav(stream = stream, recognizer = activeRecognizer, audioFile = audioFile)
-                    stream.inputFinished()
-                    while (activeRecognizer.isReady(stream)) activeRecognizer.decode(stream)
-                    val text = activeRecognizer.getResult(stream).text.trim()
-                    check(text.isNotBlank()) { "离线模型未识别到文字（音频可能过短、音量过低或只有环境声）" }
-                    DitingOfflineTranscript(text = text)
-                } finally {
-                    stream.release()
-                }
-            }
-        }
-        if (result.isFailure) releaseAfterFailure()
         result
     }
 
-    suspend fun release() = recognizerMutex.withLock {
-        recognizer?.release()
-        recognizer = null
-        recognizerDirectory = null
+    private suspend fun prepareOnce(glossary: String): Result<Unit> = cancellableResult {
+        recognizerMutex.withLock {
+            try {
+                getOrCreateRecognizer(glossary)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                releaseLocked()
+                throw error
+            }
+        }
+        Unit
     }
 
-    private suspend fun releaseAfterFailure() = recognizerMutex.withLock {
-        recognizer?.release()
-        recognizer = null
-        recognizerDirectory = null
-    }
-    private suspend fun getOrCreateRecognizer(modelDir: File): OnlineRecognizer {
-        val existing = recognizer
-        if (existing != null && recognizerDirectory == modelDir.absolutePath) return existing
-        if (!packManager.verifyInstalledFiles()) {
-            packManager.markCorrupted()
-            error("中文/英文离线识别包校验失败，请重新导入或下载")
+    suspend fun transcribe(audioFile: File, glossary: String): Result<DitingOfflineTranscript> = withContext(Dispatchers.Default) {
+        cancellableResult {
+            check(audioFile.isFile) { "音频分段不存在" }
+            val operationContext = coroutineContext
+            val audio = DitingPcmAudioReader.read(audioFile) { operationContext.ensureActive() }
+            recognizerMutex.withLock {
+                try {
+                    val result = getOrCreateRecognizer(glossary).decode(audio) { operationContext.ensureActive() }
+                    if (result.text.isBlank()) throw NoSpeechDetectedException()
+                    result
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    // Release under the same lock, so a late error cannot unload another task's model.
+                    if (error !is NoSpeechDetectedException) releaseLocked()
+                    throw error
+                }
+            }
         }
-        existing?.release()
-        val created = OnlineRecognizer(
-            config = OnlineRecognizerConfig(
-                modelConfig = OnlineModelConfig(
-                    paraformer = OnlineParaformerModelConfig(
-                        encoder = File(modelDir, "encoder.int8.onnx").absolutePath,
-                        decoder = File(modelDir, "decoder.int8.onnx").absolutePath,
-                    ),
-                    tokens = File(modelDir, "tokens.txt").absolutePath,
-                    numThreads = 2,
-                    modelType = "paraformer",
-                ),
-                enableEndpoint = false,
-            ),
-        )
+    }
+
+    suspend fun release() = recognizerMutex.withLock {
+        releaseLocked()
+    }
+
+    private suspend fun getOrCreateRecognizer(glossary: String): DitingOfflineRuntime {
+        coroutineContext.ensureActive()
+        val pack = packManager.selectedPack()
+        val modelDir = packManager.modelDirectory(pack.id)
+        val fingerprint = packManager.installedFingerprint(pack.id)
+            ?: error("所选离线语音包尚未安装或文件不完整")
+        val supportedGlossary = DitingOfflineModelOptions.glossaryFor(pack.id, glossary)
+        val key = "$fingerprint|$supportedGlossary"
+        val existing = recognizer
+        if (existing != null && recognizerKey == key) return existing
+        if (!packManager.verifyInstalledFiles(pack.id)) {
+            packManager.markCorrupted(packId = pack.id)
+            error("所选离线语音包校验失败，请重新导入或下载")
+        }
+        coroutineContext.ensureActive()
+        releaseLocked()
+        val created = DitingOfflineModelOptions.create(pack, modelDir, supportedGlossary)
+        try {
+            coroutineContext.ensureActive()
+        } catch (cancelled: CancellationException) {
+            created.release()
+            throw cancelled
+        }
         recognizer = created
-        recognizerDirectory = modelDir.absolutePath
+        recognizerKey = key
         return created
     }
-    private fun feedWav(
-        stream: com.k2fsa.sherpa.onnx.OnlineStream,
-        recognizer: OnlineRecognizer,
-        audioFile: File,
-    ) {
-        FileInputStream(audioFile).use { input ->
-            val header = ByteArray(44)
-            var headerRead = 0
-            while (headerRead < header.size) {
-                val count = input.read(header, headerRead, header.size - headerRead)
-                check(count > 0) { "WAV 文件头不完整" }
-                headerRead += count
-            }
-            val bytes = ByteArray(16_384)
-            var carryLowByte = -1
-            while (true) {
-                val count = input.read(bytes)
-                if (count <= 0) break
-                val samples = FloatArray((count + if (carryLowByte >= 0) 1 else 0) / 2)
-                var byteIndex = 0
-                var sampleIndex = 0
-                if (carryLowByte >= 0) {
-                    samples[sampleIndex++] = pcmSample(carryLowByte, bytes[0].toInt())
-                    byteIndex = 1
-                    carryLowByte = -1
-                }
-                while (byteIndex + 1 < count) {
-                    samples[sampleIndex++] = pcmSample(bytes[byteIndex].toInt(), bytes[byteIndex + 1].toInt())
-                    byteIndex += 2
-                }
-                if (byteIndex < count) {
-                    carryLowByte = bytes[byteIndex].toInt() and 0xff
-                }
-                if (sampleIndex > 0) {
-                    stream.acceptWaveform(samples.copyOf(sampleIndex), 16_000)
-                    while (recognizer.isReady(stream)) recognizer.decode(stream)
-                }
-            }
-        }
+    private fun releaseLocked() {
+        val previous = recognizer
+        recognizer = null
+        recognizerKey = null
+        previous?.release()
     }
 
-    private fun pcmSample(lowByte: Int, highByte: Int): Float {
-        val pcm = (highByte shl 8) or (lowByte and 0xff)
-        return pcm / 32768.0f
+    private suspend fun <T> cancellableResult(block: suspend () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Throwable) {
+        Result.failure(error)
     }
-    private fun glossaryToHotwords(glossary: String): String = glossary
-        .split(',', '，', '\n', '\r')
-        .map(String::trim)
-        .filter(String::isNotBlank)
-        .joinToString(" ")
+    private class NoSpeechDetectedException : IllegalStateException(
+        "离线模型未识别到文字（音频可能过短、音量过低或只有环境声）",
+    )
+
+    private companion object {
+        const val PREPARE_RETRY_DELAY_MILLIS = 300L
+    }
 }

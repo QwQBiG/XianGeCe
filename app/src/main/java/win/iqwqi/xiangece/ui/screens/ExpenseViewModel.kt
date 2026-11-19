@@ -80,6 +80,20 @@ class ExpenseViewModel @Inject constructor(
             )
         }
     }
+    fun updateRecord(record: ExpenseRecordEntity, amountYuan: Double, type: Int, category: String, note: String) {
+        if (amountYuan <= 0) return
+        val cents = (amountYuan * 100).toLong()
+        viewModelScope.launch {
+            expenseDao.insert(
+                record.copy(
+                    amountCents = cents,
+                    type = type,
+                    category = category,
+                    note = note,
+                ),
+            )
+        }
+    }
 
     fun deleteRecord(id: Long) {
         viewModelScope.launch { expenseDao.deleteById(id) }

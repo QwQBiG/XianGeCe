@@ -32,7 +32,7 @@ class TabularTimetableImporter @Inject constructor(
         val rows = when (file.extension.lowercase()) {
             "csv", "tsv" -> parseDelimited(file)
             "xlsx" -> parseXlsx(file)
-            else -> error("暂不支持旧版 .xls，请在 Excel 中另存为 .xlsx 或 .csv")
+            else -> error("暂不支持 .xls 文件，请在 Excel 中另存为 .xlsx 或 .csv")
         }
         return parseGrid(rows, defaultEndWeek)
     }

@@ -9,6 +9,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.Orientation
@@ -65,6 +71,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.ripple
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -75,6 +84,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -82,6 +92,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -118,6 +130,7 @@ import win.iqwqi.xiangece.ui.components.AppFormSheet
 import win.iqwqi.xiangece.ui.components.AppTextField
 import win.iqwqi.xiangece.ui.components.EmptyStateCard
 import win.iqwqi.xiangece.ui.components.PaperCard
+import win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance
 
 typealias SaveCourse = (
     Long?, Long?, String, String, String, Int, Int, Int, Int, Int, WeekParity,
@@ -140,11 +153,13 @@ fun CoursesScreen(
     onPickTimetablePdfList: () -> Unit,
     onPickTimetableHtml: () -> Unit,
     onPickTimetableExcel: () -> Unit,
+    onPickTimetableImage: () -> Unit = {},
     onImportTimetableCode: (String) -> Unit,
     onSaveSemester: (String, String, String) -> Unit,
     onCreateTimetable: (String) -> Unit,
     onSwitchTimetable: (Long) -> Unit,
     onRenameTimetable: (Long, String) -> Unit,
+    onDeleteTimetable: (Long) -> Unit = {},
     onSaveTimetableLayout: (String, String, String) -> Unit,
     onSavePeriod: (Int, String, String) -> Unit,
     onPickWallpaper: () -> Unit,
@@ -165,7 +180,7 @@ fun CoursesScreen(
     val maxWeek = (semester?.weekCount ?: 20).coerceAtLeast(1)
     var selectedWeek by remember(semester?.id, currentWeek) { mutableIntStateOf(currentWeek.coerceIn(1, maxWeek)) }
     var selectedDay by remember { mutableIntStateOf(LocalDate.now().dayOfWeek.value) }
-    var showWeekGrid by remember { mutableStateOf(true) }
+    var showWeekGrid by rememberSaveable { mutableStateOf(true) }
     var newCourseDefaults by remember { mutableStateOf(selectedDay to 1) }
     var editing by remember { mutableStateOf<Pair<CourseEntity?, CourseMeetingEntity?>?>(null) }
     var detail by remember { mutableStateOf<Pair<CourseEntity, CourseMeetingEntity>?>(null) }
@@ -265,7 +280,7 @@ fun CoursesScreen(
             if (dailyMeetings.isEmpty()) {
                 EmptyStateCard(
                     title = "${weekdays[selectedDay - 1]}没有课程",
-                    message = "可以切换日期，或点击添加新建课程。",
+                    message = "换一天看看，或点击右上角添加课程。",
                     icon = Icons.Outlined.CalendarMonth,
                 )
             } else {
@@ -279,9 +294,11 @@ fun CoursesScreen(
                         val course = state.courses.firstOrNull { it.id == meeting.courseId }
                         val conflictCount = CourseConflictDetector.conflicts(meeting, state.meetings).size
                         PaperCard(
-                            modifier = Modifier.clickable {
-                                if (course != null) detail = course to meeting else editing = null to meeting
-                            },
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.large)
+                                .clickable {
+                                    if (course != null) detail = course to meeting else editing = null to meeting
+                                },
                         ) {
                             Text(
                                 course?.name ?: "未命名课程",
@@ -410,6 +427,10 @@ fun CoursesScreen(
                 showImportCenter = false
                 onPickTimetableExcel()
             },
+            onPickImage = {
+                showImportCenter = false
+                onPickTimetableImage()
+            },
             onOpenCode = {
                 showCodeDialog = true
                 showImportCenter = false
@@ -476,8 +497,8 @@ fun CoursesScreen(
                 renamingTimetable = it
                 showTimetableActions = false
             },
-            onWeekView = { showWeekGrid = true },
-            onDayView = { showWeekGrid = false },
+            showWeekGrid = showWeekGrid,
+            onViewModeChange = { showWeekGrid = it },
             onSettings = {
                 showTimetableControls = true
                 showTimetableActions = false
@@ -566,6 +587,8 @@ fun CoursesScreen(
     }
     if (showTimetableControls) {
         TimetableControlsDialog(
+            timetables = state.timetables,
+            onDeleteTimetable = onDeleteTimetable,
             settings = state.settings,
             periods = state.periods,
             onDismiss = { showTimetableControls = false },
@@ -600,13 +623,13 @@ private fun CourseTopBar(
                 .clickable(onClick = onOpenTimeSheet),
         ) {
             Text(
-                "${today.year}/${today.monthValue}/${today.dayOfMonth}",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Black,
+                "${today.monthValue}月${today.dayOfMonth}日",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
             Text(
-                "第 $selectedWeek 周  ${if (selectedWeek == currentWeek) "本周" else "非本周"}  今天 $todayMeetingCount 节",
+                "第 $selectedWeek 周 · ${if (selectedWeek == currentWeek) "本周" else "浏览其他周"} · 今天 $todayMeetingCount 节",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -621,7 +644,7 @@ private fun CourseTopBar(
                 Icon(Icons.Outlined.FileDownload, contentDescription = "导入课表")
             }
             IconButton(onClick = onShare, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.IosShare, contentDescription = "复制课表口令")
+                Icon(Icons.Outlined.IosShare, contentDescription = "分享课表")
             }
             IconButton(onClick = onOpenActions, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.Outlined.MoreHoriz, contentDescription = "更多")
@@ -682,7 +705,7 @@ private fun TimeSheet(
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun TimetableActionsSheet(
+internal fun TimetableActionsSheet(
     semesterName: String,
     timetables: List<TimetableEntity>,
     courseCount: Int,
@@ -690,18 +713,20 @@ private fun TimetableActionsSheet(
     onNewTimetable: () -> Unit,
     onSwitchTimetable: (Long) -> Unit,
     onRenameTimetable: (TimetableEntity) -> Unit,
-    onWeekView: () -> Unit,
-    onDayView: () -> Unit,
+    showWeekGrid: Boolean,
+    onViewModeChange: (Boolean) -> Unit,
     onSettings: () -> Unit,
     onBackgroundSettings: () -> Unit,
     onAddedCourses: () -> Unit,
     onFaq: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(start = 24.dp, end = 24.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
@@ -712,7 +737,7 @@ private fun TimetableActionsSheet(
                     TextButton(onClick = onSettings) { Text("管理") }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 val books = timetables.ifEmpty { listOf(TimetableEntity(id = 1, name = semesterName, isCurrent = true)) }
                 books.forEach { timetable ->
                     TimetableBookTile(
@@ -727,17 +752,51 @@ private fun TimetableActionsSheet(
                     )
                 }
             }
-            Text("功能", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            HubActionRow(
-                actions = listOf(
-                    HubActionItem("周课表", Icons.Outlined.TableChart, onWeekView),
-                    HubActionItem("按天查看", Icons.Outlined.CalendarMonth, onDayView),
-                    HubActionItem("课表设置", Icons.Outlined.Settings, onSettings),
-                    HubActionItem("背景设置", Icons.Outlined.Image, onBackgroundSettings),
-                    HubActionItem("已添课程", Icons.Outlined.FormatListBulleted, onAddedCourses),
-                    HubActionItem("常见问题", Icons.Outlined.HelpOutline, onFaq),
-                ),
+            Text("查看方式", style = MaterialTheme.typography.titleSmall)
+            TimetableViewSwitch(showWeekGrid, onViewModeChange)
+            val actions = listOf(
+                HubActionItem("课表设置", Icons.Outlined.Settings, onSettings),
+                HubActionItem("背景设置", Icons.Outlined.Image, onBackgroundSettings),
+                HubActionItem("已添课程", Icons.Outlined.FormatListBulleted, onAddedCourses),
+                HubActionItem("常见问题", Icons.Outlined.HelpOutline, onFaq),
             )
+            actions.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { action ->
+                        HubAction(action.label, action.icon, action.onClick, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimetableViewSwitch(showWeekGrid: Boolean, onChange: (Boolean) -> Unit) {
+    val duration = if (LocalCompanionAppearance.current.motionEnabled) 180 else 0
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Row(Modifier.fillMaxWidth().padding(4.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(true, false).forEach { week ->
+                val selected = showWeekGrid == week
+                val background by animateColorAsState(
+                    if (selected) MaterialTheme.colorScheme.surface else Color.Transparent,
+                    tween(duration), label = "timetable-view-background",
+                )
+                val shape = RoundedCornerShape(12.dp)
+                Surface(
+                    modifier = Modifier.weight(1f).clip(shape)
+                        .selectable(selected = selected, role = Role.Tab, onClick = { if (!selected) onChange(week) }),
+                    shape = shape, color = background,
+                    contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                ) {
+                    Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (week) Icons.Outlined.TableChart else Icons.Outlined.CalendarMonth, null, Modifier.size(20.dp))
+                        Text(if (week) "按周" else "按天", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
         }
     }
 }
@@ -834,14 +893,16 @@ private fun TimetableBookTile(
     onClick: () -> Unit,
     onRename: () -> Unit,
 ) {
+    val interactions = remember { MutableInteractionSource() }
     Column(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.clickable(interactionSource = interactions, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(
             modifier = Modifier
                 .size(64.dp)
+                .clip(RoundedCornerShape(14.dp))
                 .background(
                     if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
                     RoundedCornerShape(14.dp),
@@ -850,7 +911,8 @@ private fun TimetableBookTile(
                     1.dp,
                     if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
                     RoundedCornerShape(14.dp),
-                ),
+                )
+                .indication(interactions, ripple()),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -861,7 +923,7 @@ private fun TimetableBookTile(
         }
         Text(
             name,
-            modifier = Modifier.clickable(onClick = onRename),
+            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onRename),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -920,7 +982,11 @@ private fun AddedCoursesSheet(
             } else {
                 items(courses, key = { "added-course-${it.id}" }) { course ->
                     val count = meetings.count { it.courseId == course.id }
-                    PaperCard(modifier = Modifier.clickable { onOpenCourse(course) }) {
+                    PaperCard(
+                        modifier = Modifier
+                            .clip(MaterialTheme.shapes.large)
+                            .clickable { onOpenCourse(course) },
+                    ) {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
@@ -965,7 +1031,7 @@ private fun TimetableFaqSheet(onDismiss: () -> Unit) {
             }
             PaperCard {
                 Text("为什么导入后要核对？", fontWeight = FontWeight.Medium)
-                Text("PDF、HTML、Excel、AI 截图识别都可能有歧义。确认前不会真正写入课表。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("PDF、HTML、Excel、截图识别都可能有歧义。确认前不会真正写入课表。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             PaperCard {
                 Text("多课表怎么用？", fontWeight = FontWeight.Medium)
@@ -1016,18 +1082,20 @@ private fun HubActionRow(actions: List<HubActionItem>) {
 }
 
 @Composable
-private fun HubAction(label: String, icon: ImageVector, onClick: () -> Unit) {
+private fun HubAction(label: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier.width(76.dp)) {
+    val interactions = remember { MutableInteractionSource() }
     Column(
-        modifier = Modifier
-            .width(76.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.testTag("course-action-$label")
+            .clickable(interactionSource = interactions, indication = null, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(42.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f), CircleShape),
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .indication(interactions, ripple()),
             contentAlignment = Alignment.Center,
         ) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1079,6 +1147,7 @@ private fun TimetableImportDialog(
     onPickPdfList: () -> Unit,
     onPickHtml: () -> Unit,
     onPickExcel: () -> Unit,
+    onPickImage: () -> Unit = {},
     onOpenCode: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1108,6 +1177,7 @@ private fun TimetableImportDialog(
                 OutlinedButton(onClick = onPickExcel, modifier = Modifier.weight(1f)) { Text("Excel") }
             }
             OutlinedButton(onClick = onOpenCode, modifier = Modifier.fillMaxWidth()) { Text("课表口令") }
+            OutlinedButton(onClick = onPickImage, modifier = Modifier.fillMaxWidth()) { Text("图片识别 · 先核对再导入") }
             OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("关闭") }
         }
     }
@@ -1150,7 +1220,9 @@ private fun TimetableCodeDialog(
 }
 
 @Composable
-private fun TimetableControlsDialog(
+internal fun TimetableControlsDialog(
+    timetables: List<TimetableEntity>,
+    onDeleteTimetable: (Long) -> Unit,
     settings: AppSettings,
     periods: List<PeriodTemplateEntity>,
     onDismiss: () -> Unit,
@@ -1171,6 +1243,7 @@ private fun TimetableControlsDialog(
         onDismiss = onDismiss,
         confirmLabel = "保存课表设置",
     ) {
+        TimetableDeleteChoices(timetables, onDeleteTimetable)
         Text("显示密度", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
@@ -1575,6 +1648,7 @@ private fun WeeklyTimetableGrid(
                                     .width(dayWidth)
                                     .height(rowHeight)
                                     .padding(1.dp)
+                                    .clip(RoundedCornerShape(6.dp))
                                     .background(
                                         if (!showEmptyCellsAlways) {
                                             Color.Transparent
@@ -1762,6 +1836,7 @@ private fun TimetableCell(
         modifier = Modifier
             .width(106.dp)
             .height(76.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(containerColor, RoundedCornerShape(10.dp))
             .clickable {
                 if (primaryMeeting == null) onEmptyClick() else onMeetingClick(primaryMeeting)
@@ -1977,43 +2052,10 @@ private fun CourseEditorDialog(
             }
         }
         Text("课程颜色", style = MaterialTheme.typography.labelMedium)
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            courseColors.forEach { color ->
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .background(Color(color), CircleShape)
-                        .border(
-                            width = if (selectedColor == color) 3.dp else 1.dp,
-                            color = if (selectedColor == color) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.outlineVariant
-                            },
-                            shape = CircleShape,
-                        )
-                        .clickable { selectedColor = color },
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .background(Color(selectedColor), CircleShape)
-                    .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                    .clickable { showRgbPicker = true },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Outlined.Palette,
-                    contentDescription = "自定义 RGB",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
+        win.iqwqi.xiangece.ui.components.CoursePaletteChoices(
+            classic = courseColors, selected = selectedColor,
+            onSelect = { selectedColor = it }, onCustom = { showRgbPicker = true },
+        )
         AppTextField(
             value = note,
             onValueChange = { note = it },

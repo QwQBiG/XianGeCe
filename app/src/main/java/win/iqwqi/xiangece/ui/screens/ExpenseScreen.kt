@@ -1,12 +1,15 @@
 package win.iqwqi.xiangece.ui.screens
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DirectionsBus
 import androidx.compose.material.icons.outlined.MenuBook
@@ -60,6 +66,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -71,20 +78,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.view.WindowCompat
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import win.iqwqi.xiangece.data.local.ExpenseRecordEntity
 import win.iqwqi.xiangece.ui.components.AppConfirmDialog
 import win.iqwqi.xiangece.ui.components.AppFormSheet
 import win.iqwqi.xiangece.ui.components.AppTextField
 import win.iqwqi.xiangece.ui.components.EmptyStateCard
 import win.iqwqi.xiangece.ui.components.PaperCard
+import win.iqwqi.xiangece.ui.components.AppPageHeader
 import win.iqwqi.xiangece.ui.theme.XiangeceTheme
 import java.text.SimpleDateFormat
 import java.time.LocalDate
@@ -121,14 +133,30 @@ class ExpenseActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val initialSettings = runBlocking { settingsStore.settings.first() }
         setContent {
             val settings by settingsStore.settings.collectAsState(
-                initial = win.iqwqi.xiangece.data.settings.AppSettings(),
+                initial = initialSettings,
             )
+            val useDarkTheme = if (settings.followSystemTheme) isSystemInDarkTheme() else settings.darkMode
             XiangeceTheme(
-                darkTheme = settings.darkMode,
+                darkTheme = useDarkTheme,
                 themeSeedId = settings.themeSeed,
+                companion = settings.companion,
             ) {
+                val background = MaterialTheme.colorScheme.background.toArgb()
+                SideEffect {
+                    window.statusBarColor = background
+                    window.navigationBarColor = background
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        window.isNavigationBarContrastEnforced = false
+                    }
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !useDarkTheme
+                        isAppearanceLightNavigationBars = !useDarkTheme
+                    }
+                }
                 ExpenseApp(
                     onBack = { finish() },
                 )
@@ -146,6 +174,7 @@ private fun ExpenseApp(
     val scope = rememberCoroutineScope()
     val monthState by viewModel.currentMonth.collectAsState()
     val records by viewModel.monthRecords.collectAsState()
+    var editingRecord by remember { mutableStateOf<ExpenseRecordEntity?>(null) }
     val summary by viewModel.monthSummary.collectAsState()
 
     var showAdd by remember { mutableStateOf(false) }
@@ -157,36 +186,38 @@ private fun ExpenseApp(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Outlined.ArrowBack, contentDescription = "返回")
+                AppPageHeader("生活费记账", onBack = onBack)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = { viewModel.shiftMonth(-1) }) {
+                        Icon(Icons.Outlined.ChevronLeft, contentDescription = "上个月")
+                    }
+                    Text(
+                        "${monthState.year}年${monthState.monthValue}月",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    IconButton(onClick = { viewModel.shiftMonth(1) }) {
+                        Icon(Icons.Outlined.ChevronRight, contentDescription = "下个月")
+                    }
                 }
-                Text(
-                    "生活费记账",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                // 上月/下月切换
-                OutlinedButton(onClick = { viewModel.shiftMonth(-1) }) { Text("‹") }
-                Text(
-                    "${monthState.year}-${"%02d".format(monthState.monthValue)}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 10.dp),
-                )
-                OutlinedButton(onClick = { viewModel.shiftMonth(1) }) { Text("›") }
             }
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAdd = true },
+                onClick = {
+                    editingRecord = null
+                    showAdd = true
+                },
                 containerColor = MaterialTheme.colorScheme.primary,
             ) {
                 Icon(
@@ -229,6 +260,7 @@ private fun ExpenseApp(
                         ExpenseRow(
                             record = record,
                             onDelete = { pendingDelete = record },
+                            onEdit = { editingRecord = record; showAdd = true },
                         )
                     }
                 }
@@ -238,11 +270,14 @@ private fun ExpenseApp(
 
     if (showAdd) {
         AddExpenseSheet(
+            initial = editingRecord,
             onDismiss = { showAdd = false },
             onSave = { amount, type, category, note ->
                 scope.launch {
-                    viewModel.addRecord(amount, type, category, note)
+                    editingRecord?.let { viewModel.updateRecord(it, amount, type, category, note) }
+                        ?: viewModel.addRecord(amount, type, category, note)
                 }
+                editingRecord = null
                 showAdd = false
             },
         )
@@ -311,7 +346,7 @@ private fun SummaryColumn(label: String, amountYuan: Double, icon: ImageVector, 
 }
 
 @Composable
-private fun ExpenseRow(record: ExpenseRecordEntity, onDelete: () -> Unit) {
+private fun ExpenseRow(record: ExpenseRecordEntity, onEdit: () -> Unit, onDelete: () -> Unit) {
     val category = ExpenseCategory.fromKey(record.category)
     val isIncome = record.type == 1
     PaperCard {
@@ -358,6 +393,9 @@ private fun ExpenseRow(record: ExpenseRecordEntity, onDelete: () -> Unit) {
                 fontWeight = FontWeight.Bold,
                 color = if (isIncome) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Outlined.Edit, contentDescription = "编辑", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Outlined.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -368,21 +406,26 @@ private fun ExpenseRow(record: ExpenseRecordEntity, onDelete: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddExpenseSheet(
+    initial: ExpenseRecordEntity? = null,
     onDismiss: () -> Unit,
     onSave: (amountYuan: Double, type: Int, category: String, note: String) -> Unit,
 ) {
-    var isIncome by remember { mutableStateOf(false) }
-    var amountText by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(ExpenseCategory.FOOD) }
-    var note by remember { mutableStateOf("") }
+    var isIncome by remember(initial) { mutableStateOf(initial?.type == 1) }
+    var amountText by remember(initial) {
+        mutableStateOf(initial?.let { "%.2f".format(Locale.US, it.amountCents / 100.0) }.orEmpty())
+    }
+    var category by remember(initial) {
+        mutableStateOf(initial?.let { ExpenseCategory.fromKey(it.category) } ?: ExpenseCategory.FOOD)
+    }
+    var note by remember(initial) { mutableStateOf(initial?.note.orEmpty()) }
 
     val categories = if (isIncome) ExpenseCategory.incomeEntries else ExpenseCategory.expenseEntries
     val amountYuan = amountText.toDoubleOrNull() ?: 0.0
 
     // 统一使用 AppFormSheet：标题、副标题、内容滚动、底部取消/保存按钮由组件提供
     AppFormSheet(
-        title = "记一笔",
-        subtitle = "记录每一笔收支，掌握月度流水",
+        title = if (initial == null) "记一笔" else "修改记录",
+        subtitle = if (initial == null) "记录每一笔收支，掌握月度流水" else "修改金额、分类或备注",
         onConfirm = { onSave(amountYuan, if (isIncome) 1 else 0, category.key, note.trim()) },
         onDismiss = onDismiss,
         confirmLabel = "保存",
