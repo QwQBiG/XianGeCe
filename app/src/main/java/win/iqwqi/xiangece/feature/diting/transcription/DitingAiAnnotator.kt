@@ -20,6 +20,7 @@ data class DitingAiAnnotation(
     val note: String,
     val evidence: String,
     val confidence: Float,
+    val expectedTexts: Map<Int, String> = emptyMap(),
 )
 
 @Singleton
@@ -30,25 +31,39 @@ class DitingAiAnnotator @Inject constructor(
 ) {
     private val mutex = Mutex()
     private val requestMutex = Mutex()
-    private val batches = mutableMapOf<Long, MutableList<DitingSegmentEntity>>()
+    private data class Batch(
+        val segments: MutableList<DitingSegmentEntity> = mutableListOf(),
+        val context: List<DitingSegmentEntity>,
+    )
+    private val batches = mutableMapOf<Long, Batch>()
 
     suspend fun onTranscript(
         session: DitingSessionEntity,
         segment: DitingSegmentEntity,
+        previousSegments: List<DitingSegmentEntity> = emptyList(),
     ): List<DitingAiAnnotation> {
-        if (segment.text.isBlank()) return emptyList()
+        if (!session.aiAnnotationEnabled || !segment.isFinal || segment.text.isBlank()) return emptyList()
         if (!isReadyForRequests()) return emptyList()
         val ready = mutex.withLock {
-            val batch = batches.getOrPut(session.id) { mutableListOf() }
-            batch += segment
-            if (batch.size >= BATCH_SIZE) batches.remove(session.id) else null
+            val batch = batches.getOrPut(session.id) {
+                Batch(context = previousSegments.filter { it.sequence < segment.sequence }.takeLast(2))
+            }
+            batch.segments.removeAll { it.sequence == segment.sequence }
+            batch.segments += segment
+            val ordered = batch.segments.sortedBy { it.sequence }
+            val duration = ordered.last().endMillis - ordered.first().startMillis
+            val sentenceEnded = segment.text.trimEnd().lastOrNull() in listOf('。', '！', '？', '.', '!', '?')
+            val ready = ordered.size >= BATCH_SIZE || duration >= 60_000 ||
+                ordered.sumOf { it.text.length } >= 1_800 ||
+                (ordered.size >= 3 && duration >= 30_000 && sentenceEnded)
+            if (ready) batches.remove(session.id) else null
         } ?: return emptyList()
-        return annotate(session, ready)
+        return annotate(session, ready.segments, ready.context)
     }
 
     suspend fun flush(session: DitingSessionEntity): List<DitingAiAnnotation> {
         val batch = mutex.withLock { batches.remove(session.id) } ?: return emptyList()
-        return annotate(session, batch)
+        return annotate(session, batch.segments, batch.context)
     }
 
     suspend fun clear(sessionId: Long) {
@@ -58,17 +73,20 @@ class DitingAiAnnotator @Inject constructor(
     private suspend fun annotate(
         session: DitingSessionEntity,
         segments: List<DitingSegmentEntity>,
+        context: List<DitingSegmentEntity>,
     ): List<DitingAiAnnotation> = requestMutex.withLock {
         val settings = settingsStore.settings.first()
-        if (!settings.ditingAiAnnotationEnabled || !settings.aiEnabled) return emptyList()
+        if (!session.aiAnnotationEnabled || !settings.ditingAiAnnotationEnabled || !settings.aiEnabled) return emptyList()
         if (settings.aiBaseUrl.isBlank() || settings.aiModel.isBlank()) return emptyList()
         if (settings.encryptedApiKey.isBlank()) return emptyList()
 
-        val prompt = buildPrompt(session, segments)
+        val prompt = buildPrompt(session, segments, context)
         val content = withTimeoutOrNull(AI_TIMEOUT_MILLIS) {
             aiCampusEnhancer.annotateDiting(prompt, settings).getOrNull()
         } ?: return emptyList()
-        return DitingAiAnnotationParser.parse(content, segments, json)
+        // Context is deliberately excluded from the parser's eligible sequences.
+        val expected = (context + segments).associate { it.sequence to it.text }
+        return DitingAiAnnotationParser.parse(content, segments, json).map { it.copy(expectedTexts = expected) }
     }
 
     private suspend fun isReadyForRequests(): Boolean {
@@ -83,6 +101,7 @@ class DitingAiAnnotator @Inject constructor(
     private fun buildPrompt(
         session: DitingSessionEntity,
         segments: List<DitingSegmentEntity>,
+        context: List<DitingSegmentEntity>,
     ): String {
         val modeInstruction = if (session.mode == "water_class") {
             "水课优先识别老师开放提问、点名、邀请回答、同学提问、答疑开始/结束；即使没有问号也可根据前后语义判断；忽略反问、修辞问句、口头禅和“问题是……”陈述。"
@@ -103,7 +122,13 @@ class DitingAiAnnotator @Inject constructor(
             appendLine("去重：同一事件只保留一条，优先最短且最有辨识度的证据；术语提示不能作为证据。")
             appendLine("规则：只依据输入及相邻分段；拿不准就不标；每个 S 和 type 最多一条；sequence 必须来自输入；evidence 必须是对应 S 原文中连续且逐字相同的短片段，不能改写、翻译或拼接；title 和 note 用简洁、自然的中文表达，可以概括识别错误后的真实含义，但不得添加原文没有的事实；confidence<0.80 的项目不要输出；最多4条，按 sequence 升序。")
             appendLine("只返回严格 JSON 数组，不要 Markdown、解释或额外字段。字段：type,sequence,title,note,evidence,confidence；type 只能是 HIGHLIGHT 或 QUESTION。")
-            appendLine("输入（S序号: 转写）：")
+            if (context.isNotEmpty()) {
+                appendLine("前文背景（只能帮助理解，禁止为这些 C 序号生成标记或引用证据）：")
+                context.sortedBy { it.sequence }.forEach {
+                    appendLine("C${it.sequence}: ${it.text.replace(Regex("\\s+"), " ").takeLast(MAX_TEXT_CHARS)}")
+                }
+            }
+            appendLine("本次新增输入（只有以下 S 序号可以产生标记；不要重复标记前文已有事件）：")
             append(lines)
         }
     }

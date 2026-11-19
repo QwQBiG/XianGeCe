@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.time.Instant
@@ -74,6 +75,7 @@ fun InboxScreen(
             item {
                 EmptyStateCard(
                     title = "收件箱是空的",
+                    companion = true,
                     message = "从微信、QQ或相册分享截图到弦歌册，也可以点击右上角导入。",
                     icon = Icons.Outlined.AddPhotoAlternate,
                 )
@@ -81,7 +83,9 @@ fun InboxScreen(
         } else {
             items(state.inbox, key = { it.id }) { item ->
                 PaperCard(
-                    modifier = Modifier.clickable(
+                    modifier = Modifier
+                        .clip(MaterialTheme.shapes.large)
+                        .clickable(
                         enabled = item.status == InboxStatus.PENDING,
                     ) { onOpen(item) },
                 ) {

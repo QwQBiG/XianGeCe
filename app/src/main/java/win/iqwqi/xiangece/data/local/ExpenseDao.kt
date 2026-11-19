@@ -16,8 +16,14 @@ interface ExpenseDao {
     @Query("SELECT * FROM expense_records ORDER BY occurredAtEpochMillis DESC")
     fun observeAll(): Flow<List<ExpenseRecordEntity>>
 
+    @Query("SELECT * FROM expense_records ORDER BY occurredAtEpochMillis DESC")
+    suspend fun allRecords(): List<ExpenseRecordEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: ExpenseRecordEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(records: List<ExpenseRecordEntity>)
 
     @Query("DELETE FROM expense_records WHERE id = :id")
     suspend fun deleteById(id: Long)

@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * PP-OCRv5 mobile 的本机中文/英文识别适配层。
+ * PP-OCRv5 mobile/server 的本机中文/英文识别适配层。
  * 模型只从应用私有目录加载，不会把图片上传到网络。
  */
 @Singleton
@@ -28,7 +28,9 @@ class OfflineOcrService @Inject constructor(
 
     suspend fun recognize(imageFile: File): OfflineOcrResult = mutex.withLock {
         check(imageFile.isFile) { "原始图片副本已不存在，请重新导入" }
-        check(packManager.isChinesePackInstalled()) { "尚未安装免费中文离线 OCR 包" }
+        // Pin this request to one descriptor even if selection changes while it is running.
+        val pack = packManager.selectedPack()
+        check(packManager.isChinesePackInstalled(pack)) { "尚未安装所选的「${pack.title}」资源包" }
 
         // 先做轻量图片预检，避免坏图或极大图先触发 OpenCV/ORT 原生加载。
         val bounds = readImageBounds(imageFile)
@@ -40,8 +42,8 @@ class OfflineOcrService @Inject constructor(
             "图片文件过大，请先压缩或裁剪后再识别（最大 ${MAX_IMAGE_BYTES / (1024 * 1024)} MB）"
         }
 
-        val modelDirectory = packManager.modelDirectory()
-        val ocr = getOrCreate(modelDirectory)
+        val modelDirectory = packManager.modelDirectory(pack)
+        val ocr = getOrCreate(modelDirectory, pack)
         val imageBytes = imageFile.readBytes()
         val run = try {
             ocr.recognize(imageBytes)
@@ -98,30 +100,32 @@ class OfflineOcrService @Inject constructor(
         engineDirectory = null
     }
 
-    private suspend fun getOrCreate(directory: File): PaddleOCR {
+    private suspend fun getOrCreate(directory: File, pack: OfflineOcrPackDescriptor): PaddleOCR {
         val existing = engine
         if (existing != null && engineDirectory == directory.absolutePath) return existing
-        if (!packManager.verifyInstalledFiles()) {
-            packManager.markCorrupted()
+        if (!packManager.verifyInstalledFiles(pack)) {
+            packManager.markCorrupted(pack = pack)
             error("中文离线 OCR 包校验失败，请重新导入或下载")
         }
         existing?.release()
+        engine = null
+        engineDirectory = null
         val created = PaddleOCR.create(
             context = context,
             config = PaddleOCRConfig(
-                // PP-OCRv5 mobile 常用 min=736；高分辨率截图不会被放大，
-                // 低分辨率图片会得到足够的检测尺寸，避免“模型已开启但没有文字”。
-                detLimitSideLen = 736,
-                detMaxSideLimit = 4000,
+                // Keep mobile behavior unchanged; bound server input for phone memory.
+                detLimitSideLen = pack.detLimitSideLen,
+                detMaxSideLimit = pack.detMaxSideLimit,
+                detLimitType = pack.detLimitType,
                 detThresh = 0.3f,
                 detBoxThresh = 0.6f,
                 recScoreThresh = 0.0f,
                 recBatchSize = 1,
             ),
             engineConfig = EngineConfig(numThreads = 4),
-            detModelAssetPath = packManager.modelFile("det.onnx").absolutePath,
-            recModelAssetPath = packManager.modelFile("rec.onnx").absolutePath,
-            recConfigAssetPath = packManager.modelFile("rec.yml").absolutePath,
+            detModelAssetPath = File(directory, "det.onnx").absolutePath,
+            recModelAssetPath = File(directory, "rec.onnx").absolutePath,
+            recConfigAssetPath = File(directory, "rec.yml").absolutePath,
         )
         engine = created
         engineDirectory = directory.absolutePath

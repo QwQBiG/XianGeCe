@@ -131,20 +131,14 @@ internal data class WidgetModel(
             }
             val meetings = if (week != null) dao.allMeetings().filter { it.dayOfWeek == today.dayOfWeek.value && it.activeIn(week) } else emptyList()
             val currentMinutes = now.toLocalTime().toSecondOfDay() / 60
-            val next = meetings
-                .mapNotNull { meeting ->
-                    val period = periods.firstOrNull { it.periodIndex == meeting.startPeriod } ?: return@mapNotNull null
-                    if (period.endMinutes <= currentMinutes) return@mapNotNull null
-                    meeting to period
-                }
-                .minByOrNull { it.second.startMinutes }
-            val course = next?.first?.let { courses[it.courseId] }
+            val next = nextWidgetCourse(meetings, periods, currentMinutes)
+            val course = next?.meeting?.let { courses[it.courseId] }
             return WidgetModel(
                 dateLabel = "${today.monthValue}月${today.dayOfMonth}日 ${dayLabel(today.dayOfWeek)}",
                 weekLabel = if (week != null) "第 ${week} 周" else "尚未设置学期",
                 courseLabel = course?.name ?: "今日无课",
-                locationLabel = next?.first?.location?.ifBlank { course?.defaultLocation.orEmpty() }.orEmpty(),
-                timeLabel = next?.second?.let { "${formatTime(it.startMinutes)}–${formatTime(it.endMinutes)}" }.orEmpty(),
+                locationLabel = next?.meeting?.location?.ifBlank { course?.defaultLocation.orEmpty() }.orEmpty(),
+                timeLabel = next?.let { "${formatTime(it.startMinutes)}–${formatTime(it.endMinutes)}" }.orEmpty(),
                 hasCourse = next != null,
             )
         }

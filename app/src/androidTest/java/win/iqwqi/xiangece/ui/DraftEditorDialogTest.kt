@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -66,7 +67,7 @@ class DraftEditorDialogTest {
         }
 
         composeRule.onNodeWithText("确认写入").assertIsNotEnabled()
-        composeRule.onNodeWithText("我已逐项核对并确认").performClick()
+        composeRule.onNodeWithText("我已逐项核对并确认").performScrollTo().performClick()
         composeRule.onNodeWithText("确认写入").assertIsEnabled()
     }
 }

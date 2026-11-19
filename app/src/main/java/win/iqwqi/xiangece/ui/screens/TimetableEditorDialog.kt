@@ -64,6 +64,10 @@ fun TimetableEditorDialog(
     val missingLocationCount = editor.rows.count { it.name.isNotBlank() && it.location.isBlank() }
     val missingTeacherCount = editor.rows.count { it.name.isNotBlank() && it.teacher.isBlank() }
     var showSource by remember(editor.inboxId) { mutableStateOf(false) }
+    var showSourceImage by remember(editor.inboxId) { mutableStateOf(false) }
+    if (showSourceImage) editor.sourceImagePath?.let {
+        win.iqwqi.xiangece.ui.components.SourceImagePreview(it) { showSourceImage = false }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -78,6 +82,7 @@ fun TimetableEditorDialog(
                 Text("核对并写入课表", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 PaperCard {
                     Text(editor.sourceLabel, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    win.iqwqi.xiangece.ui.companion.CompanionWorking(isWorking)
                     Text("识别到 $recognizedRows 个上课时段。请确认课程名、楼宇教室和老师后再写入。", style = MaterialTheme.typography.bodySmall)
                     if (missingLocationCount > 0 || missingTeacherCount > 0) {
                         Text(
@@ -93,6 +98,9 @@ fun TimetableEditorDialog(
                     }
                     TextButton(onClick = { showSource = !showSource }) {
                         Text(if (showSource) "收起识别原文" else "查看识别原文")
+                    }
+                    editor.sourceImagePath?.let {
+                        TextButton(onClick = { showSourceImage = true }) { Text("放大核对原图") }
                     }
                     if (showSource) {
                         Text(

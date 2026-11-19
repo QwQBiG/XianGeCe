@@ -38,6 +38,7 @@ object AppModule {
             XiangeceDatabase.MIGRATION_6_7,
             XiangeceDatabase.MIGRATION_7_8,
             XiangeceDatabase.MIGRATION_8_9,
+            XiangeceDatabase.MIGRATION_9_10,
         ).build()
 
     @Provides

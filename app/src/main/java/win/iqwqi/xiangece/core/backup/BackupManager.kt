@@ -24,6 +24,7 @@ import win.iqwqi.xiangece.data.local.CampusDao
 import win.iqwqi.xiangece.data.local.CampusEventEntity
 import win.iqwqi.xiangece.data.local.CourseEntity
 import win.iqwqi.xiangece.data.local.CourseMeetingEntity
+import win.iqwqi.xiangece.data.local.ExpenseRecordEntity
 import win.iqwqi.xiangece.data.local.GradeRecordEntity
 import win.iqwqi.xiangece.data.local.GradeRuleEntity
 import win.iqwqi.xiangece.data.local.HabitCheckinEntity
@@ -56,6 +57,7 @@ data class BackupPayload(
     val meetings: List<CourseMeetingEntity>,
     val tasks: List<TaskEntity>,
     val events: List<CampusEventEntity>,
+    val calendarNotes: List<win.iqwqi.xiangece.data.local.CalendarNoteEntity> = emptyList(),
     val inbox: List<InboxItemEntity>,
     val ocrSnapshots: List<OcrSnapshotEntity>,
     val grades: List<GradeRecordEntity>,
@@ -66,6 +68,7 @@ data class BackupPayload(
     val ditingSessions: List<DitingSessionEntity> = emptyList(),
     val ditingSegments: List<DitingSegmentEntity> = emptyList(),
     val ditingMarkers: List<DitingMarkerEntity> = emptyList(),
+    val expenseRecords: List<ExpenseRecordEntity> = emptyList(),
 )
 
 internal object BackupPayloadValidator {
@@ -78,6 +81,11 @@ internal object BackupPayloadValidator {
         require(payload.courses.size <= 500) { "课程数据过多" }
         require(payload.meetings.size <= 5_000) { "课表数据过多" }
         require(payload.tasks.size <= 10_000) { "任务数据过多" }
+        require(payload.calendarNotes.size <= 100_000) { "日历备注过多" }
+        require(payload.calendarNotes.map { it.dateEpochDay }.distinct().size == payload.calendarNotes.size) { "日历备注日期重复" }
+        require(payload.calendarNotes.all {
+            it.text.length <= 10_000 && runCatching { java.time.LocalDate.ofEpochDay(it.dateEpochDay) }.isSuccess
+        }) { "日历备注无效" }
         require(payload.events.size <= 10_000) { "事件数据过多" }
         require(payload.inbox.size <= 10_000) { "收件数据过多" }
         require(payload.ocrSnapshots.size <= 10_000) { "OCR 数据过多" }
@@ -88,6 +96,7 @@ internal object BackupPayloadValidator {
         require(payload.ditingSessions.size <= 10_000) { "课堂录音记录过多" }
         require(payload.ditingSegments.size <= 100_000) { "课堂转写分段过多" }
         require(payload.ditingMarkers.size <= 100_000) { "课堂标记过多" }
+        require(payload.expenseRecords.size <= 100_000) { "记账记录过多" }
 
         val courseIds = payload.courses.map { it.id }.toSet()
         val timetableIds = payload.timetables.map { it.id }.toSet()
@@ -109,6 +118,7 @@ internal object BackupPayloadValidator {
         require(payload.habitCheckins.all { it.habitId in habitIds }) { "打卡引用了不存在的长期事项" }
         require(payload.ditingSegments.all { it.sessionId in ditingSessionIds }) { "课堂分段引用了不存在的课堂记录" }
         require(payload.ditingMarkers.all { it.sessionId in ditingSessionIds }) { "课堂标记引用了不存在的课堂记录" }
+        require(payload.expenseRecords.all { it.type in 0..1 && it.amountCents > 0 }) { "记账数据无效" }
         require(payload.ditingMarkers.all { it.segmentId == null || it.segmentId in ditingSegmentIds }) { "课堂标记引用了不存在的转写分段" }
         require(payload.periods.all { it.periodIndex in 1..30 && it.startMinutes in 0..1439 && it.endMinutes in 1..1440 }) {
             "节次时间无效"
@@ -132,6 +142,7 @@ class BackupManager @Inject constructor(
     private val database: XiangeceDatabase,
     private val settingsStore: AppSettingsStore,
     private val json: Json,
+    private val notebookRepository: win.iqwqi.xiangece.feature.notebook.data.NotebookRepository,
 ) {
     suspend fun exportTo(uri: Uri) = withContext(Dispatchers.IO) {
         val settings = settingsStore.settings.first().copy(
@@ -155,6 +166,7 @@ class BackupManager @Inject constructor(
             meetings = dao.allMeetings(),
             tasks = dao.allTasks(),
             events = dao.allEvents(),
+            calendarNotes = dao.allCalendarNotes(),
             inbox = originalInbox.map { item ->
                 item.copy(imagePath = imagePathByInbox[item.id])
             },
@@ -169,6 +181,7 @@ class BackupManager @Inject constructor(
                 ditingDao.allSegments(session.id).map { it.copy(audioPath = "") }
             },
             ditingMarkers = ditingDao.allMarkers(),
+            expenseRecords = database.expenseDao().allRecords(),
         )
         context.contentResolver.openOutputStream(uri, "wt").use { output ->
             requireNotNull(output) { "无法创建备份文件" }
@@ -181,11 +194,20 @@ class BackupManager @Inject constructor(
                     file.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
                 }
+                if (notebookRepository.store.list().isNotEmpty()) {
+                    val notebookFile = File(context.cacheDir, "notebook-backup-${UUID.randomUUID()}.zip")
+                    try {
+                        notebookFile.outputStream().use { win.iqwqi.xiangece.feature.notebook.data.NotebookArchive.export(notebookRepository.store, it) }
+                        zip.putNextEntry(ZipEntry("notebook.zip"))
+                        notebookFile.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    } finally { notebookFile.delete() }
+                }
             }
         }
     }
 
-    suspend fun restoreFrom(uri: Uri) = withContext(Dispatchers.IO) {
+    suspend fun restoreFrom(uri: Uri): String? = withContext(Dispatchers.IO) {
         val tempDirectory = File(context.cacheDir, "xiangece-restore-${UUID.randomUUID()}").apply { mkdirs() }
         val extractedImages = mutableMapOf<String, File>()
         val createdImages = mutableListOf<File>()
@@ -193,6 +215,7 @@ class BackupManager @Inject constructor(
             var backupJson: ByteArray? = null
             var entryCount = 0
             var totalImageBytes = 0L
+            var notebookZip: File? = null
             context.contentResolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "无法读取备份文件" }
                 ZipInputStream(input).use { zip ->
@@ -205,6 +228,12 @@ class BackupManager @Inject constructor(
                             entry.name == "backup.json" -> {
                                 require(backupJson == null) { "备份包含重复的数据文件" }
                                 backupJson = zip.readLimited(MAX_JSON_BYTES)
+                            }
+                            entry.name == "notebook.zip" -> {
+                                require(notebookZip == null) { "备份包含重复的笔记库" }
+                                notebookZip = File(tempDirectory, "notebook.zip").also { target ->
+                                    target.outputStream().use { zip.copyLimited(it, 160L * 1024 * 1024) }
+                                }
                             }
                             IMAGE_ENTRY.matches(entry.name) -> {
                                 val target = File(tempDirectory, entry.name.substringAfterLast('/'))
@@ -224,6 +253,11 @@ class BackupManager @Inject constructor(
             val payloadBytes = requireNotNull(backupJson) { "不是有效的弦歌册备份" }
             val payload = json.decodeFromString<BackupPayload>(payloadBytes.toString(Charsets.UTF_8))
             BackupPayloadValidator.validate(payload)
+            // Validate the notebook separately before replacing any business records.
+            notebookZip?.let { archive ->
+                val validation = win.iqwqi.xiangece.feature.notebook.data.NotebookFileStore(File(tempDirectory, "notebook-check"))
+                archive.inputStream().use { win.iqwqi.xiangece.feature.notebook.data.NotebookArchive.import(validation, it) }
+            }
 
             val inboxDirectory = File(context.filesDir, "inbox").apply { mkdirs() }.canonicalFile
             val restoredInbox = payload.inbox.map { item ->
@@ -246,6 +280,7 @@ class BackupManager @Inject constructor(
                 dao.clearInbox()
                 dao.clearTasks()
                 dao.clearEvents()
+                dao.clearCalendarNotes()
                 dao.clearMeetings()
                 dao.clearCourses()
                 dao.clearTimetables()
@@ -254,6 +289,7 @@ class BackupManager @Inject constructor(
                 dao.clearGrades()
                 dao.clearGradeRules()
                 dao.clearHabitCheckins()
+                database.expenseDao().deleteAll()
                 dao.clearHabitTemplates()
                 ditingDao.deleteMarkersForBackup()
                 ditingDao.deleteSegmentsForBackup()
@@ -263,6 +299,7 @@ class BackupManager @Inject constructor(
                 dao.upsertMeetings(payload.meetings)
                 dao.upsertTasks(payload.tasks)
                 dao.upsertEvents(payload.events)
+                dao.upsertCalendarNotes(payload.calendarNotes)
                 dao.upsertInbox(restoredInbox)
                 dao.upsertOcrSnapshots(payload.ocrSnapshots)
                 dao.upsertGrades(payload.grades)
@@ -273,12 +310,23 @@ class BackupManager @Inject constructor(
                 dao.upsertHabitTemplates(payload.habitTemplates)
                 dao.upsertHabitCheckins(payload.habitCheckins)
                 ditingDao.upsertSessions(payload.ditingSessions)
+                database.expenseDao().upsertAll(payload.expenseRecords)
                 ditingDao.upsertSegments(payload.ditingSegments)
                 ditingDao.upsertMarkers(payload.ditingMarkers)
             }
             settingsStore.restore(payload.settings)
             oldImagePaths.forEach { privateInboxFile(it)?.delete() }
             oldDitingSessionIds.forEach { ditingAudioStore.deleteSessionFiles(it) }
+            // Notes are merged into a new folder; existing local notes are never cleared by a restore.
+            notebookZip?.let { archive ->
+                runCatching {
+                    archive.inputStream().use { win.iqwqi.xiangece.feature.notebook.data.NotebookArchive.import(notebookRepository.store, it) }
+                    notebookRepository.refresh()
+                }.exceptionOrNull()?.let { error ->
+                    return@withContext "课程等数据已恢复；笔记尚未恢复：${error.message}。原笔记仍保留，可从备份内的 notebook.zip 单独导入。"
+                }
+            }
+            null
         } catch (error: Throwable) {
             createdImages.forEach(File::delete)
             throw error

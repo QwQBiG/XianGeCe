@@ -1,0 +1,24 @@
+[
+  {
+    "file": "opencv-4.10.0.aar",
+    "url": "https://repo.maven.apache.org/maven2/org/opencv/opencv/4.10.0/opencv-4.10.0.aar",
+    "bytes": 112288832,
+    "sha256": "eb2bdae229c761769d459bd42c991bdcecb4da04f7b54dcb2aa9e2cb1dc68ec0"
+  },
+  {
+    "file": "sherpa-onnx-1.13.4-no-ort.aar",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar",
+    "upstream": {
+      "bytes": 48847529,
+      "sha256": "03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780"
+    },
+    "exclude": [
+      "jni/arm64-v8a/libonnxruntime.so",
+      "jni/armeabi-v7a/libonnxruntime.so",
+      "jni/x86/libonnxruntime.so",
+      "jni/x86_64/libonnxruntime.so"
+    ],
+    "bytes": 37708847,
+    "sha256": "45720fde87bdfdd0af330832bdc9739d8871642bdcdac83507f93694ff5f3e22"
+  }
+]

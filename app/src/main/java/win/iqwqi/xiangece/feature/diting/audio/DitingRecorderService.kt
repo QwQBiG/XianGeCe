@@ -24,8 +24,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -38,7 +42,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import win.iqwqi.xiangece.feature.diting.data.DitingMarkerEntity
 import win.iqwqi.xiangece.feature.diting.data.DitingRepository
 import win.iqwqi.xiangece.feature.diting.domain.DitingMarkerType
-import win.iqwqi.xiangece.feature.diting.domain.prefersOfflineDitingTranscription
 import win.iqwqi.xiangece.feature.diting.domain.DitingSessionStatus
 import win.iqwqi.xiangece.feature.diting.transcription.DitingSignal
 import win.iqwqi.xiangece.feature.diting.transcription.DitingCloudTranscriber
@@ -64,11 +67,13 @@ class DitingRecorderService : Service() {
     private var sessionId: Long = 0
     private var isPaused = false
     private var lastQuestionAlertAtMillis = 0L
-    private val cloudTranscriptionJobs = mutableSetOf<Job>()
+    private var transcriptionWorker: Job? = null
+    private var transcriptionWake: Channel<Unit>? = null
     private val localTranscriptionJobs = mutableSetOf<Job>()
-    private val cloudTranscriptionLimiter = Semaphore(2)
     private val transcriptionResultMutex = Mutex()
+    private val localInferenceMutex = Mutex()
     @Volatile private var acceptingTranscriptionResults = false
+    private val offlineRecoveryPending = AtomicBoolean(false)
     private var audioDeviceCallback: AudioDeviceCallback? = null
     private var audioRouteMonitorJob: Job? = null
     private var lastInputRouteLabel: String = ""
@@ -130,21 +135,14 @@ class DitingRecorderService : Service() {
         val files = audioStore.filesFor(id)
         try {
             startForegroundCompat(buildNotification("正在准备录音"))
+            offlineRecoveryPending.set(false)
             val localTranscriptionEnabled = AtomicBoolean(false)
             val cloudTranscriptionConfigured = session.cloudTranscriptionEnabled && cloudTranscriber.isConfigured()
-            var offlineTranscriptionConfigured = session.cloudTranscriptionEnabled && offlineTranscriber.isConfigured()
-            var offlinePreparationError: String? = null
-            if (offlineTranscriptionConfigured) {
-                updateNotification("正在加载本机中英离线识别")
-                val prepared = offlineTranscriber.prepare()
-                if (prepared.isFailure) {
-                    offlineTranscriptionConfigured = false
-                    offlinePreparationError = prepared.exceptionOrNull().toDiagnosticReason()
-                    Log.e("DitingRecorderService", "Offline recognizer preparation failed: $offlinePreparationError", prepared.exceptionOrNull())
-                }
-            }
-            val preferOfflineTranscription = prefersOfflineDitingTranscription(session.languageMode, offlineTranscriptionConfigured)
-            if (!preferOfflineTranscription && session.cloudTranscriptionEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // A configured cloud route never prepares or allocates the local model at startup.
+            val offlineTranscriptionConfigured = !cloudTranscriptionConfigured &&
+                session.cloudTranscriptionEnabled && offlineTranscriber.isConfigured()
+            if (!cloudTranscriptionConfigured && !offlineTranscriptionConfigured &&
+                session.cloudTranscriptionEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 localTranscriptionEnabled.set(speechRecognizer.start(
                     languageMode = session.languageMode,
                     biasingStrings = session.glossary
@@ -203,12 +201,16 @@ class DitingRecorderService : Service() {
                     },
                 ))
             }
+            if (localTranscriptionEnabled.get()) {
+                offlineRecoveryPending.set(false)
+            }
             repository.updateTranscriptionEngine(id, when {
                 localTranscriptionEnabled.get() -> "android_on_device"
-                offlineTranscriptionConfigured -> "offline_onnx"
                 cloudTranscriptionConfigured -> "cloud"
+                offlineTranscriptionConfigured -> "offline_onnx"
                 else -> "audio_only"
             })
+            startTranscriptionWorker(id, session.languageMode, session.glossary)
             val value = DitingPcmRecorder(
                 files = files,
                 segmentFile = { sequence -> audioStore.segmentFile(id, sequence) },
@@ -223,12 +225,11 @@ class DitingRecorderService : Service() {
                         languageMode = session.languageMode,
                         cloudTranscriptionEnabled = session.cloudTranscriptionEnabled,
                         transcriptionEnabled = localTranscriptionEnabled.get() || offlineEnabledForChunk || cloudEnabledForChunk,
+                        expectsRecognizerEvents = localTranscriptionEnabled.get(),
                     )
                     notifyQuestionIfNeeded(signals)
-                    if (offlineEnabledForChunk) {
-                        scheduleOfflineTranscription(id, chunk, session.glossary)
-                    } else if (cloudEnabledForChunk) {
-                        scheduleCloudTranscription(id, chunk, session.languageMode, session.glossary)
+                    if (offlineEnabledForChunk || cloudEnabledForChunk) {
+                        transcriptionWake?.trySend(Unit)
                     }
                 },
             )
@@ -237,9 +238,6 @@ class DitingRecorderService : Service() {
             registerAudioRouteMonitoring()
             acceptingTranscriptionResults = true
             repository.markRecordingStarted(id, files.directory.absolutePath, files.recording.absolutePath)
-            offlinePreparationError?.let { reason ->
-                repository.updateSessionMessage(id, "文字记录暂时无法启动，录音仍会保存；结束后可以重试。")
-            }
             durationJob = serviceScope.launch(Dispatchers.IO) {
                 while (isActive) {
                     delay(2_000)
@@ -248,11 +246,10 @@ class DitingRecorderService : Service() {
             }
             startInProgress = false
             val inputRoute = value.currentInputRouteLabel()
-            val transcriptionMessage = offlinePreparationError?.let { "文字记录暂时不可用，录音仍会保存；结束后可以重试。" }
-                ?: when {
+            val transcriptionMessage = when {
                     localTranscriptionEnabled.get() -> "正在录音 · 文字记录已开启"
                     offlineTranscriptionConfigured -> "正在录音 · 文字记录已开启"
-                    cloudTranscriptionConfigured -> "正在录音 · 文字记录已开启"
+                    cloudTranscriptionConfigured -> "正在录音 · 云端文字记录已开启"
                     else -> "正在录音 · 只保存声音"
                 }
             updateNotification("$transcriptionMessage · 输入：$inputRoute")
@@ -279,77 +276,91 @@ class DitingRecorderService : Service() {
             stopSelf()
         }
     }
-    private fun scheduleOfflineTranscription(
-        id: Long,
-        chunk: DitingAudioChunk,
-        glossary: String,
-    ) {
-        val job = serviceScope.launch(Dispatchers.Default) {
-            cloudTranscriptionLimiter.withPermit {
-                val result = offlineTranscriber.transcribe(chunk.file, glossary)
-                if (result.isSuccess) {
-                    val transcript = result.getOrThrow()
-                    withAcceptedTranscription(id) {
-                        val signals = transcriptionCoordinator.onTranscriptReady(
-                            sessionId = id,
-                            sequence = chunk.sequence,
-                            text = transcript.text,
-                            rawText = transcript.text,
-                            language = transcript.language,
-                            confidence = transcript.confidence,
-                        )
-                        notifyQuestionIfNeeded(signals)
-                    }
-                } else {
-                    val reason = result.exceptionOrNull().toDiagnosticReason()
-                    Log.e("DitingRecorderService", "Offline transcription failed: session=$id sequence=${chunk.sequence}; $reason", result.exceptionOrNull())
-                    withAcceptedTranscription(id) {
-                        repository.markSegmentAudioOnly(id, chunk.sequence, "这一段文字暂未识别出来，音频仍可回听。")
-                        updateNotification("录音继续，这一小段文字暂未识别，音频已保留")
+    /** Rows in Room are the queue; only a conflated wake-up is kept in memory. */
+    private fun startTranscriptionWorker(id: Long, languageMode: String, glossary: String) {
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        transcriptionWake = wake
+        transcriptionWorker = serviceScope.launch(Dispatchers.IO) {
+            for (ignored in wake) {
+                while (isActive && acceptingTranscriptionResults && sessionId == id) {
+                    val segment = repository.nextAwaitingTranscription(id) ?: break
+                    try {
+                        transcribeSavedSegment(id, segment, languageMode, glossary)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        Log.e("DitingRecorderService", "Segment processing failed: $id/${segment.sequence}", error)
+                        withAcceptedTranscription(id) {
+                            repository.markSegmentAudioOnly(id, segment.sequence)
+                        }
                     }
                 }
             }
         }
-        synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs += job }
-        job.invokeOnCompletion { synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs -= job } }
     }
 
-    private fun scheduleCloudTranscription(
+    private suspend fun transcribeSavedSegment(
         id: Long,
-        chunk: DitingAudioChunk,
+        segment: win.iqwqi.xiangece.feature.diting.data.DitingSegmentEntity,
         languageMode: String,
         glossary: String,
     ) {
-        val job = serviceScope.launch(Dispatchers.IO) {
-            cloudTranscriptionLimiter.withPermit {
-                val result = cloudTranscriber.transcribe(chunk.file, languageMode, glossary)
-                if (result.isSuccess) {
-                    val transcript = result.getOrThrow()
-                    withAcceptedTranscription(id) {
-                        val signals = transcriptionCoordinator.onTranscriptReady(
-                            sessionId = id,
-                            sequence = chunk.sequence,
-                            text = transcript.text,
-                            rawText = transcript.text,
-                            language = transcript.language,
-                            confidence = transcript.confidence,
-                        )
-                        notifyQuestionIfNeeded(signals)
-                    }
-                } else {
-                    withAcceptedTranscription(id) {
-                        repository.markSegmentAudioOnly(id, chunk.sequence)
-                        updateNotification("这一小段文字识别暂时失败，声音已保留")
+        repository.markSegmentTranscribing(id, segment.sequence)
+        val result = win.iqwqi.xiangece.feature.diting.transcription.transcribeCloudFirst(
+            isSessionValid = {
+                acceptingTranscriptionResults && sessionId == id &&
+                    repository.sessionSnapshot(id)?.let {
+                        it.cloudTranscriptionEnabled && it.status in setOf("recording", "paused", "processing")
+                    } == true
+            },
+            cloudConfigured = { cloudTranscriber.isConfigured() },
+            cloud = { cloudTranscriber.transcribe(java.io.File(segment.audioPath), languageMode, glossary) },
+            localConfigured = { offlineTranscriber.isConfigured() },
+            local = {
+                localInferenceMutex.withLock {
+                    try {
+                        offlineTranscriber.transcribe(java.io.File(segment.audioPath), glossary).map {
+                            win.iqwqi.xiangece.feature.diting.transcription.DitingCloudTranscript(it.text, it.language, it.confidence)
+                        }
+                    } finally {
+                        // JNI decoding may finish after cancellation. Release only after it returns.
+                        if (!acceptingTranscriptionResults) withContext(NonCancellable) { offlineTranscriber.release() }
                     }
                 }
+            },
+        )
+        currentCoroutineContext().ensureActive()
+        withAcceptedTranscription(id) {
+            val routed = result.getOrNull()
+            if (routed == null || routed.value.text.isBlank()) {
+                repository.markSegmentAudioOnly(id, segment.sequence, "这一段未能转写，原音已保存，可稍后重试。")
+                updateNotification("这一段未能转写，录音仍会保存")
+                return@withAcceptedTranscription
             }
+            repository.updateTranscriptionEngine(id, routed.engine)
+            if (routed.cloudFailed) {
+                offlineRecoveryPending.set(true)
+                repository.updateSessionMessage(id, "云端暂不可用，这一段已使用本机识别；后续分段会继续尝试云端。")
+            } else if (offlineRecoveryPending.compareAndSet(true, false)) {
+                repository.updateSessionMessage(id, null)
+            }
+            val signals = transcriptionCoordinator.onTranscriptReady(
+                sessionId = id,
+                sequence = segment.sequence,
+                text = routed.value.text,
+                rawText = routed.value.text,
+                language = routed.value.language,
+                confidence = routed.value.confidence,
+            )
+            notifyQuestionIfNeeded(signals)
         }
-        synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs += job }
-        job.invokeOnCompletion { synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs -= job } }
     }
     private suspend fun awaitTranscriptions() {
+        // Closing the signal permits the single worker to finish draining saved rows.
+        transcriptionWake?.trySend(Unit)
+        transcriptionWake?.close()
         val jobs = buildList {
-            addAll(synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs.toList() })
+            transcriptionWorker?.let { add(it) }
             addAll(synchronized(localTranscriptionJobs) { localTranscriptionJobs.toList() })
         }
         withTimeoutOrNull(TRANSCRIPTION_FLUSH_TIMEOUT_MILLIS) { jobs.joinAll() }
@@ -362,7 +373,9 @@ class DitingRecorderService : Service() {
     }
 
     private fun launchTranscriptionCallback(id: Long, block: suspend () -> Unit) {
-        val job = serviceScope.launch {
+        // Callbacks hold the result mutex across Room writes. Keep them off Main so
+        // service teardown can cancel them without waiting for a blocked Main dispatcher.
+        val job = serviceScope.launch(Dispatchers.IO) {
             withAcceptedTranscription(id, block)
         }
         synchronized(localTranscriptionJobs) { localTranscriptionJobs += job }
@@ -379,11 +392,14 @@ class DitingRecorderService : Service() {
     }
 
     private fun cancelPendingTranscriptions() {
+        transcriptionWake?.close()
+        transcriptionWake = null
         val jobs = buildList {
-            addAll(synchronized(cloudTranscriptionJobs) { cloudTranscriptionJobs.toList() })
+            transcriptionWorker?.let { add(it) }
             addAll(synchronized(localTranscriptionJobs) { localTranscriptionJobs.toList() })
         }
         jobs.forEach { it.cancel() }
+        transcriptionWorker = null
     }
     private suspend fun pauseRecording() {
         val current = recorder ?: return
@@ -432,6 +448,8 @@ class DitingRecorderService : Service() {
             )
         }
         runCatching { speechRecognizer.finish() }
+        runCatching { repository.recoverSavedChunks(sessionId) }
+        updateNotification("声音已保存，正在整理剩余文字")
         awaitTranscriptions()
         stopAcceptingTranscriptionResults()
         val finalLocalSignals = runCatching {
@@ -442,7 +460,11 @@ class DitingRecorderService : Service() {
         val aiSignals = runCatching { transcriptionCoordinator.flushAi(sessionId) }.getOrDefault(emptyList())
         notifyQuestionIfNeeded(aiSignals + finalLocalSignals)
         speechRecognizer.stop()
-        repository.markTranscriptionUnavailable(sessionId)
+        val pendingCount = repository.awaitingTranscriptionCount(sessionId)
+        if (pendingCount > 0) {
+            repository.updateSessionMessage(sessionId, "声音已保存，还有 $pendingCount 段文字未完成，可在分段中重试。")
+        }
+        repository.markTranscriptionUnavailable(sessionId, "收尾等待已结束，原音已保存，可重试这一段。")
         transcriptionCoordinator.clearSession(sessionId)
         if (result.failure == null) {
             repository.finishSession(
@@ -611,22 +633,18 @@ class DitingRecorderService : Service() {
 
     override fun onDestroy() {
         unregisterAudioRouteMonitoring()
+        // Service teardown runs on the main thread. Do not wait up to a minute for
+        // network/native recognition here; only close the audio files and save status.
+        acceptingTranscriptionResults = false
+        cancelPendingTranscriptions()
         val current = recorder
         if (current != null && sessionId > 0) {
             runCatching {
                 runBlocking(Dispatchers.IO) {
                     repository.updateStatus(sessionId, DitingSessionStatus.PROCESSING)
                     val result = current.stop()
-                    runCatching { speechRecognizer.finish() }
-                    awaitTranscriptions()
-                    stopAcceptingTranscriptionResults()
-                    val finalLocalSignals = runCatching {
-                        transcriptionCoordinator.reanalyzeLocalSignals(sessionId)
-                    }.onFailure { error ->
-                        Log.e("DitingRecorderService", "Final local signal reanalysis failed", error)
-                    }.getOrDefault(emptyList())
-                    val aiSignals = runCatching { transcriptionCoordinator.flushAi(sessionId) }.getOrDefault(emptyList())
-                    notifyQuestionIfNeeded(aiSignals + finalLocalSignals)
+                    repository.recoverSavedChunks(sessionId)
+                    repository.markTranscriptionUnavailable(sessionId, "录音服务已结束，原音已保存；未完成文字可重试。")
                     if (result.failure == null) {
                         repository.finishSession(
                             sessionId,
@@ -651,7 +669,13 @@ class DitingRecorderService : Service() {
         }
         runCatching { runBlocking(Dispatchers.IO) { stopAcceptingTranscriptionResults() } }
         speechRecognizer.stop()
-        runCatching { runBlocking(Dispatchers.IO) { offlineTranscriber.release() } }
+        if (localInferenceMutex.tryLock()) {
+            try {
+                runCatching { runBlocking(Dispatchers.IO) { offlineTranscriber.release() } }
+            } finally {
+                localInferenceMutex.unlock()
+            }
+        } // An in-flight native decode owns cleanup in its finally block.
         if (sessionId > 0) runBlocking(Dispatchers.IO) {
             repository.markTranscriptionUnavailable(sessionId)
             transcriptionCoordinator.clearSession(sessionId)
@@ -671,7 +695,7 @@ class DitingRecorderService : Service() {
         private const val notificationId = 3101
         private const val questionNotificationId = 3102
         private const val QUESTION_ALERT_DEBOUNCE_MILLIS = 8_000L
-        private const val TRANSCRIPTION_FLUSH_TIMEOUT_MILLIS = 15_000L
+        private const val TRANSCRIPTION_FLUSH_TIMEOUT_MILLIS = 45_000L
         const val ACTION_START = "win.iqwqi.xiangece.diting.START"
         const val ACTION_PAUSE = "win.iqwqi.xiangece.diting.PAUSE"
         const val ACTION_RESUME = "win.iqwqi.xiangece.diting.RESUME"
@@ -703,7 +727,7 @@ private fun Throwable?.toDiagnosticReason(): String {
     if (raw.isBlank()) return "未知错误"
     return when {
         raw.contains("OrtGetApiBase", ignoreCase = true) || raw.contains("cannot locate symbol", ignoreCase = true) ->
-            "本机语音引擎版本不兼容，请更新基础 APK 后重试"
+            "当前应用无法使用此语音资源，请更新应用后重试"
         raw.contains("No such file", ignoreCase = true) || raw.contains("does not exist", ignoreCase = true) ->
             "离线语音包文件不完整，请在“我的资源”重新导入或下载"
         raw.contains("out of memory", ignoreCase = true) || raw.contains("memory", ignoreCase = true) ->

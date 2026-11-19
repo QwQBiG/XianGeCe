@@ -20,4 +20,29 @@ keys/
 /outputs/
 /tmp/
 *.log
+__pycache__/
+*.py[cod]
 icon-preview.png
+
+# 缓存、安装包、登记材料与工作记录仅留在本机
+.kotlin/
+.env
+.env.*
+!.env.example
+*.apk
+*.aab
+*.p12
+*.pfx
+/soft-copyright-materials/
+/offline-packs/
+/kurisu-v2-upgrade/
+/kurisu-v1-validation.json
+/docs/AI_WORK_CONTEXT.md
+
+# 公开源码只包含应用内成品图与合成测试素材。
+/artifacts/
+/native/
+*.aar
+*.wav
+*.m4a
+.DS_Store

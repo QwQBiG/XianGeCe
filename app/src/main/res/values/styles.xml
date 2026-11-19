@@ -2,10 +2,17 @@
 <resources>
     <style name="Theme.Xiangece" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
+        <item name="android:colorBackground">@color/startup_background</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@drawable/splash_window_background</item>
         <item name="android:windowActionModeOverlay">true</item>
+    </style>
+
+    <!-- Secondary Compose activities draw the correctly themed first frame. -->
+    <style name="Theme.Xiangece.Secondary" parent="Theme.Xiangece">
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
     </style>
 </resources>

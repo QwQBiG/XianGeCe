@@ -64,6 +64,10 @@ import win.iqwqi.xiangece.domain.model.WeekParity
 import win.iqwqi.xiangece.domain.semester.TeachingWeekCalculator
 import win.iqwqi.xiangece.domain.semester.ScheduleCalculator
 import win.iqwqi.xiangece.ui.AppUiState
+import win.iqwqi.xiangece.ui.companion.CompanionHomeHeader
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.LazyListScope
+import win.iqwqi.xiangece.data.settings.CompanionDisplay
 import win.iqwqi.xiangece.ui.components.BrandHeader
 import win.iqwqi.xiangece.ui.components.EmptyStateCard
 import win.iqwqi.xiangece.ui.components.AppConfirmDialog
@@ -73,7 +77,7 @@ import win.iqwqi.xiangece.ui.components.InkDivider
 import win.iqwqi.xiangece.ui.components.PaperCard
 import win.iqwqi.xiangece.ui.components.SectionTitle
 
-private val dateLabel = DateTimeFormatter.ofPattern("M月d日 EEEE")
+private val dateLabel = DateTimeFormatter.ofPattern("M月d日 EEEE", java.util.Locale.CHINA)
 private val timeLabel = DateTimeFormatter.ofPattern("M月d日 HH:mm")
 private val editableTime = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
@@ -89,12 +93,16 @@ fun TodayScreen(
     state: AppUiState,
     contentPadding: PaddingValues,
     onToggleTask: (TaskEntity) -> Unit,
-    onUpdateTask: (TaskEntity, String, String) -> Unit,
-    onUpdateEvent: (CampusEventEntity, String, String) -> Unit,
+    onUpdateTask: (TaskEntity, String, String, String) -> Unit,
+    onUpdateEvent: (CampusEventEntity, String, String, String, String) -> Unit,
     onCreateTask: (String, String, String) -> Unit,
     onCreateEvent: (String, String, String, String) -> Unit,
     onDeleteTask: (TaskEntity) -> Unit,
     onDeleteEvent: (CampusEventEntity) -> Unit,
+    onOpenWardrobe: () -> Unit = {},
+    onGreetCompanion: () -> Unit = {},
+    companionPaused: Boolean = false,
+    companionActive: Boolean = true,
 ) {
     var pendingTaskDelete by remember { mutableStateOf<TaskEntity?>(null) }
     var pendingEventDelete by remember { mutableStateOf<CampusEventEntity?>(null) }
@@ -167,31 +175,28 @@ fun TodayScreen(
 
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().statusBarsPadding(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            start = 20.dp,
-            top = 20.dp,
-            end = 20.dp,
+            top = 0.dp,
             bottom = contentPadding.calculateBottomPadding() + 24.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item {
-            BrandHeader(
-                title = "今日",
-                subtitle = today.format(dateLabel),
-                icon = Icons.Outlined.Home,
-                action = {
-                    IconButton(onClick = { showSearch = true }) {
-                        Icon(Icons.Outlined.Search, contentDescription = "搜索")
-                    }
-                    IconButton(onClick = { showQuickAdd = true }) {
-                        Icon(Icons.Outlined.Add, contentDescription = "新建事项")
-                    }
-                },
+        item(key = "companion-header") {
+            CompanionHomeHeader(
+                appearance = state.settings.companion.copy(motionEnabled = state.settings.companion.motionEnabled && !companionPaused),
+                greeting = when (nowDateTime.hour) { in 5..11 -> "早上好"; in 12..17 -> "下午好"; else -> "晚上好" },
+                date = today.format(dateLabel),
+                semester = semester?.name ?: "开启你的新学期",
+                status = semester?.let { semesterStatus(it.startDateEpochDay, it.weekCount, today, currentWeek) }
+                    ?: "设置开学日期，开始记录日常",
+                progress = semester?.let { semesterProgress },
+                onWardrobe = onOpenWardrobe, onGreet = onGreetCompanion,
+                active = companionActive && !companionPaused,
+                onSearch = { showSearch = true }, onCreate = { showQuickAdd = true },
             )
         }
-        item {
+        if (state.settings.companion.display == CompanionDisplay.HIDDEN) homeItem(key = "semester-summary") {
             PaperCard {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -199,9 +204,9 @@ fun TodayScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Column {
-                        Text(semester?.name ?: "尚未设置学期", fontWeight = FontWeight.SemiBold)
+                        Text(semester?.name ?: "开启你的新学期", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (semester == null) "前往设置添加学期"
+                            if (semester == null) "设置开学日期后，这里会显示周次与进度"
                             else semesterStatus(semester.startDateEpochDay, semester.weekCount, today, currentWeek),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -218,41 +223,19 @@ fun TodayScreen(
                 }
             }
         }
-        item {
-            val currentCourse = currentMeeting?.let { meeting -> state.courses.firstOrNull { it.id == meeting.courseId } }
-            PaperCard {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "今日共 ${allTodayMeetings.size} 节",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            currentCourse?.name ?: "已完成 $completedTodayCount 节",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    Text("今日剩余 ${todayMeetings.size} 节", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+        homeItem {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("今日课程", when {
+                    allTodayMeetings.isEmpty() -> "今天没有排课"
+                    todayMeetings.isEmpty() -> "今天的课程已结束"
+                    else -> "已结束 $completedTodayCount 节 · 接下来 ${todayMeetings.size} 节"
+                }, Modifier.weight(1f))
+                Text("${allTodayMeetings.size} 节", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary)
             }
         }
-        item { SectionTitle("今日课程", "已结束自动收起 · 点击课程查看详情") }
-        if (todayMeetings.isEmpty()) {
-            item {
-                EmptyStateCard(
-                    title = "今天没有课程",
-                    message = "给自己留一点从容，或去「课程」补充课表。",
-                    icon = Icons.Outlined.CalendarMonth,
-                )
-            }
-        } else {
-            items(todayMeetings, key = { "meeting-${it.id}" }) { meeting ->
+        if (todayMeetings.isNotEmpty()) {
+            homeItems(todayMeetings, key = { "meeting-${it.id}" }) { meeting ->
                 val course = state.courses.firstOrNull { it.id == meeting.courseId }
                 PaperCard {
                     Text(course?.name ?: "未命名课程", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -268,7 +251,7 @@ fun TodayScreen(
                 }
             }
         }
-        item {
+        homeItem {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -276,8 +259,6 @@ fun TodayScreen(
             ) {
                 SectionTitle(
                     if (showCompleted) "已完成（${completedTasks.size}）" else "待办（${pendingTasks.size}/${allPendingTasks.size}）",
-                    if (showCompleted) "可勾选恢复为待办"
-                    else "默认提前 ${state.settings.taskReminderHoursFirst} 小时和 ${state.settings.taskReminderHoursSecond} 小时提醒",
                     modifier = Modifier.weight(1f),
                 )
                 FilterChip(
@@ -288,7 +269,7 @@ fun TodayScreen(
             }
         }
         if (!showCompleted && allPendingTasks.isNotEmpty()) {
-            item {
+            homeItem {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -306,7 +287,7 @@ fun TodayScreen(
             }
         }
         if (!showCompleted && taskCourseIds.isNotEmpty()) {
-            item {
+            homeItem {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -331,7 +312,7 @@ fun TodayScreen(
             }
         }
         if (tasks.isEmpty()) {
-            item {
+            homeItem {
                 if (showCompleted) {
                     EmptyStateCard(
                         title = "还没有已完成任务",
@@ -341,7 +322,7 @@ fun TodayScreen(
                 } else {
                     EmptyStateCard(
                         title = "暂无待办",
-                        message = "点击右上角新建，或从收件箱确认通知。",
+                        message = "记下计划、约定，或任何不想忘记的事。",
                         icon = Icons.Outlined.TaskAlt,
                         actionLabel = "新建事项",
                         onAction = { showQuickAdd = true },
@@ -349,7 +330,7 @@ fun TodayScreen(
                 }
             }
         } else {
-            items(tasks, key = { "task-${it.id}" }) { task ->
+            homeItems(tasks, key = { "task-${it.id}" }) { task ->
                 val courseName = task.courseId?.let { courseId ->
                     state.courses.firstOrNull { it.id == courseId }?.name
                 }
@@ -393,7 +374,15 @@ fun TodayScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                            if (task.status == TaskStatus.TODO) {
+                            if (task.note.isNotBlank()) {
+                                Text(
+                                    task.note,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                )
+                            }
+                            if (task.status == TaskStatus.TODO && taskReminders.isNotEmpty()) {
                                 Text(
                                     if (taskReminders.isEmpty()) {
                                         "无待触发提醒"
@@ -409,27 +398,20 @@ fun TodayScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = { editingTask = task }) {
-                            Icon(Icons.Outlined.Edit, contentDescription = "修改任务")
-                        }
-                        IconButton(onClick = { pendingTaskDelete = task }) {
-                            Icon(Icons.Outlined.Delete, contentDescription = "删除任务")
-                        }
+                        win.iqwqi.xiangece.ui.components.AppRecordActions({ editingTask = task },
+                            { pendingTaskDelete = task }, "修改任务", "删除任务")
                     }
                 }
             }
         }
-        item { SectionTitle("校园事件", "近期活动一览，已过期的自动隐藏") }
+        homeItem { SectionTitle("近日安排") }
         if (events.isEmpty()) {
-            item {
-                EmptyStateCard(
-                    title = "近期没有事件",
-                    message = "新增事件，或在「百宝」里把通知转成日程，都会出现在这里。",
-                    icon = Icons.Outlined.Event,
-                )
+            homeItem {
+                Text("暂时没有安排", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
             }
         } else {
-            items(events, key = { "event-${it.id}" }) { event ->
+            homeItems(events, key = { "event-${it.id}" }) { event ->
                 PaperCard {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -441,19 +423,22 @@ fun TodayScreen(
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(onClick = { editingEvent = event }) {
-                            Icon(Icons.Outlined.Edit, contentDescription = "修改事件")
-                        }
-                        IconButton(onClick = { pendingEventDelete = event }) {
-                            Icon(Icons.Outlined.Delete, contentDescription = "删除事件")
-                        }
+                        win.iqwqi.xiangece.ui.components.AppRecordActions({ editingEvent = event },
+                            { pendingEventDelete = event }, "修改事件", "删除事件")
                     }
-                    InkDivider()
                     Text(formatEpoch(event.startsAtEpochMillis), color = MaterialTheme.colorScheme.primary)
                     if (event.location.isNotBlank()) Text("⌖ ${event.location}")
+                    if (event.note.isNotBlank()) {
+                        Text(
+                            event.note,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                        )
                 }
             }
         }
+    }
     }
 
     pendingTaskDelete?.let { task ->
@@ -483,10 +468,13 @@ fun TodayScreen(
             title = "修改任务",
             initialTitle = task.title,
             initialDateTime = task.dueAtEpochMillis?.let(::formatEditable).orEmpty(),
+            initialLocation = "",
+            initialNote = task.note,
+            isEvent = false,
             allowEmptyTime = true,
             onDismiss = { editingTask = null },
-            onSave = { title, dateTime ->
-                onUpdateTask(task, title, dateTime)
+            onSave = { title, dateTime, _, note ->
+                onUpdateTask(task, title, dateTime, note)
                 editingTask = null
             },
         )
@@ -496,10 +484,13 @@ fun TodayScreen(
             title = "修改事件",
             initialTitle = event.title,
             initialDateTime = formatEditable(event.startsAtEpochMillis),
+            initialLocation = event.location,
+            initialNote = event.note,
+            isEvent = true,
             allowEmptyTime = false,
             onDismiss = { editingEvent = null },
-            onSave = { title, dateTime ->
-                onUpdateEvent(event, title, dateTime)
+            onSave = { title, dateTime, location, note ->
+                onUpdateEvent(event, title, dateTime, location, note)
                 editingEvent = null
             },
         )
@@ -522,6 +513,17 @@ fun TodayScreen(
     }
 }
 
+private fun LazyListScope.homeItem(key: Any? = null, content: @Composable () -> Unit) {
+    item(key = key) { Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) { content() } }
+}
+
+private fun <T> LazyListScope.homeItems(values: List<T>, key: (T) -> Any, content: @Composable (T) -> Unit) {
+    items(values, key = key) { value ->
+        val motion = win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance.current.motionEnabled
+        Box(Modifier.fillMaxWidth().then(if (motion) Modifier.animateItem() else Modifier).padding(horizontal = 20.dp)) { content(value) }
+    }
+}
+
 @Composable
 private fun DeleteConfirmation(
     title: String,
@@ -540,21 +542,26 @@ private fun DeleteConfirmation(
 }
 
 @Composable
-private fun ScheduleEditDialog(
+internal fun ScheduleEditDialog(
     title: String,
     initialTitle: String,
     initialDateTime: String,
+    initialLocation: String,
+    initialNote: String,
+    isEvent: Boolean,
     allowEmptyTime: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit,
+    onSave: (String, String, String, String) -> Unit,
 ) {
     var editedTitle by remember(initialTitle) { mutableStateOf(initialTitle) }
     var dateTime by remember(initialDateTime) { mutableStateOf(initialDateTime) }
+    var location by remember(initialLocation) { mutableStateOf(initialLocation) }
+    var note by remember(initialNote) { mutableStateOf(initialNote) }
     val validTime = dateTime.isBlank() && allowEmptyTime ||
         runCatching { LocalDateTime.parse(dateTime.trim(), editableTime) }.isSuccess
     AppFormSheet(
         title = title,
-        onConfirm = { onSave(editedTitle, dateTime) },
+        onConfirm = { onSave(editedTitle, dateTime, location, note.trim()) },
         onDismiss = onDismiss,
         confirmEnabled = editedTitle.isNotBlank() && validTime,
     ) {
@@ -566,9 +573,23 @@ private fun ScheduleEditDialog(
         AppTextField(
             value = dateTime,
             onValueChange = { dateTime = it },
-            label = "时间（yyyy-MM-dd HH:mm）",
-            supportingText = if (allowEmptyTime) "任务可以留空，表示无截止时间" else null,
+            label = "时间",
+            supportingText = if (allowEmptyTime) "可留空；填写示例：2026-09-01 18:00" else "填写示例：2026-09-01 18:00",
             isError = !validTime,
+        )
+        if (isEvent) {
+            AppTextField(
+                value = location,
+                onValueChange = { location = it },
+                label = "地点（可选）",
+            )
+        }
+        AppTextField(
+            value = note,
+            onValueChange = { note = it },
+            label = "备注（可选）",
+            singleLine = false,
+            minLines = 2,
         )
     }
 }
@@ -593,7 +614,7 @@ private fun QuickAddDialog(
         runCatching { LocalDateTime.parse(dateTime.trim(), editableTime) }.isSuccess
     AppFormSheet(
         title = "新建事项",
-        subtitle = "选择类型后填写信息，事件必须有时间。",
+        subtitle = "先选择事项类型，再补充必要信息。",
         onConfirm = {
             if (isEvent) onCreateEvent(title, dateTime, location, note)
             else onCreateTask(title, dateTime, note)
@@ -623,7 +644,7 @@ private fun QuickAddDialog(
             value = dateTime,
             onValueChange = { dateTime = it },
             label = if (isEvent) "开始时间" else "截止时间（可留空）",
-            supportingText = "格式：2026-09-01 18:00",
+            supportingText = "例如：2026-09-01 18:00",
             isError = !validTime,
         )
         if (isEvent) {

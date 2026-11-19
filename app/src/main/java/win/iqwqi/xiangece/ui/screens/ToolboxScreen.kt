@@ -28,7 +28,8 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.AutoAwesomeMosaic
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.EventAvailable
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Savings
@@ -52,6 +53,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import win.iqwqi.xiangece.ui.components.AppActionRow
+import win.iqwqi.xiangece.ui.components.AppActionGroup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,25 +95,31 @@ fun ToolboxScreen(
     state: AppUiState,
     contentPadding: PaddingValues,
     onParseText: (String, Boolean) -> Unit,
-    onPickImage: () -> Unit,
+    onPickImage: (Boolean) -> Unit,
     onSavePeriod: (Int, String, String) -> Unit,
     onAddGrade: (String, String, String) -> Unit,
     onDeleteGrade: (Long) -> Unit,
     onSaveGradePreferences: (String, String) -> Unit,
     onOpenAiSettings: () -> Unit = {},
     onOpenResources: () -> Unit = {},
+    onOpenCalendar: () -> Unit = {},
 ) {
-    var noticeText by remember { mutableStateOf("") }
+    var noticeText by rememberSaveable { mutableStateOf("") }
+    var showNotice by rememberSaveable { mutableStateOf(false) }
     var useAi by remember(state.settings.aiEnabled) { mutableStateOf(state.settings.aiEnabled) }
     var panel by remember { mutableStateOf<ToolboxPanel?>(null) }
     val context = LocalContext.current
 
     val tools = remember(state.settings.aiEnabled, state.settings.aiProvider) {
         listOf(
+            ToolItem("笔记库", "书写 / 查找", Icons.AutoMirrored.Outlined.TextSnippet) {
+                context.startActivity(Intent(context, win.iqwqi.xiangece.feature.notebook.ui.NotebookActivity::class.java))
+            },
+            ToolItem("日历日程", "手记 / 待办", Icons.Outlined.CalendarMonth, onOpenCalendar),
             ToolItem("谛听", "课堂录音", Icons.Outlined.Mic) { context.startActivity(Intent(context, DitingActivity::class.java)) },
             ToolItem("成绩", "GPA / 加权", Icons.Outlined.TrendingUp) { panel = ToolboxPanel.GRADE },
             ToolItem("课程时间", "同步课表", Icons.Outlined.AccessTime) { panel = ToolboxPanel.PERIOD },
-            ToolItem("考试倒计时", "天数 / 提醒", Icons.Outlined.EventAvailable) { panel = ToolboxPanel.EXAM },
+            ToolItem("考试倒计时", "天数 / 提醒", Icons.Outlined.HourglassBottom) { panel = ToolboxPanel.EXAM },
             ToolItem("计算器", "科学 / 换算", Icons.Outlined.Calculate) { panel = ToolboxPanel.CALCULATOR },
             ToolItem("专注番茄", "沉浸计时", Icons.Outlined.Timer) { panel = ToolboxPanel.POMODORO },
             ToolItem("记账", "收支流水", Icons.Outlined.Savings) {
@@ -128,62 +138,22 @@ fun ToolboxScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item { BrandHeader("百宝", "把通知、图片和小计算收进一个工具箱", icon = Icons.Outlined.AutoAwesomeMosaic) }
+        item { BrandHeader("百宝", "学习与生活，随手处理", icon = Icons.Outlined.AutoAwesomeMosaic) }
+        item { SectionTitle("常用") }
         item {
-            PaperCard {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Outlined.TextSnippet, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column {
-                        Text("通知 / 图片转日程", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text("文字转日程；图片识别可使用免费离线 OCR。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("AI 增强", fontWeight = FontWeight.Medium)
-                        Text(
-                            if (state.settings.aiEnabled) "文字限制 2400 字以内，减少 token 消耗。"
-                            else "未启用 AI 时仍会生成本地草稿。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onOpenResources) { Text("我的资源") }
-                        TextButton(onClick = onOpenAiSettings) { Text("AI 设置") }
-                        Switch(useAi, { useAi = it }, enabled = state.settings.aiEnabled)
-                    }
-                }
-                OutlinedTextField(
-                    value = noticeText,
-                    onValueChange = { noticeText = it },
-                    label = { Text("通知文字") },
-                    minLines = 3,
-                    maxLines = 6,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { onParseText(noticeText, useAi) },
-                        enabled = noticeText.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                    ) { Text("文字转日程") }
-                    OutlinedButton(onClick = onPickImage, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Outlined.Image, contentDescription = null)
-                        Text(" 图片识别")
-                    }
-                }
+            AppActionGroup {
+            tools.take(3).forEach { tool ->
+            AppActionRow(tool.title, tool.subtitle, tool.icon, tool.onClick)
+        }
+            AppActionRow("通知整理", if (noticeText.isBlank()) "从图片或文字整理日程" else "继续整理未完成的内容",
+                Icons.Outlined.Image, { showNotice = true })
             }
         }
-        item { SectionTitle("小工具", "统一入口，点开使用完整功能") }
+        item { SectionTitle("更多工具", modifier = Modifier.padding(top = 8.dp)) }
         item {
-            // 3 列网格：图标在上，文字在下，更紧凑专业
-            val columns = 3
-            tools.chunked(columns).forEach { rowTools ->
+            // Two columns leave room for longer labels and larger fonts.
+            val columns = 2
+            tools.drop(3).chunked(columns).forEach { rowTools ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -197,7 +167,7 @@ fun ToolboxScreen(
                             onClick = tool.onClick,
                         )
                     }
-                    // 不足 3 个时补占位，保持等宽对齐
+                    // Keep the final row aligned.
                     repeat(columns - rowTools.size) {
                         Spacer(Modifier.weight(1f))
                     }
@@ -206,6 +176,12 @@ fun ToolboxScreen(
         }
     }
 
+    if (showNotice) NoticeCollectionSheet(noticeText, { noticeText = it }, useAi, { useAi = it }, state.settings.aiEnabled,
+        onDismiss = { showNotice = false },
+        onParse = { onParseText(noticeText, useAi); showNotice = false },
+        onImage = { onPickImage(useAi); showNotice = false },
+        onResources = { showNotice = false; onOpenResources() },
+        onService = { showNotice = false; onOpenAiSettings() })
     when (panel) {
         ToolboxPanel.GRADE -> GradeToolSheet(
             state = state,
@@ -250,20 +226,15 @@ private fun ToolTile(
     icon: ImageVector,
     onClick: () -> Unit,
 ) {
-    PaperCard(
-        modifier = modifier
-            .height(134.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick),
-    ) {
+    androidx.compose.material3.Surface(onClick = onClick, modifier = modifier.padding(bottom = 10.dp),
+        shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(32.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
                 contentAlignment = Alignment.Center,
@@ -279,14 +250,11 @@ private fun ToolTile(
                 title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
             )
             Text(
                 subtitle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
-                maxLines = 2,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
     }
@@ -317,11 +285,11 @@ private fun GradeToolSheet(
         ) {
             item {
                 Text("成绩与加权平均分", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text("成绩数据只在本地计算。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("记录课程成绩，随时查看加权平均分。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
                 PaperCard {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf("4.0", "4.3", "5.0", "自定义").forEach { value ->
                             FilterChip(
                                 selected = scheme == value,
@@ -346,7 +314,7 @@ private fun GradeToolSheet(
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text("保存自定义规则") }
                     }
-                    InkDivider()
+                    Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         SummaryNumber("总学分", summary.totalCredits)
                         SummaryNumber("加权分", summary.weightedAverage)
@@ -360,7 +328,7 @@ private fun GradeToolSheet(
             items(state.grades, key = { it.id }) { grade ->
                 PaperCard {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
+                        Column(Modifier.weight(1f)) {
                             Text(grade.courseName, fontWeight = FontWeight.Medium)
                             Text("${grade.credit} 学分 · ${grade.score} 分", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -397,7 +365,7 @@ private fun PeriodEditSheet(
         ) {
             item {
                 Text("课程时间", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text("这里修改后会同步课程页左侧节次时间。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("调整每节课的开始与结束时间。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             items(periods.sortedBy { it.periodIndex }.take(24), key = { it.periodIndex }) { period ->
                 PeriodEditorRow(period, onSavePeriod)
@@ -579,7 +547,7 @@ private fun CalculatorSheet(onDismiss: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("计算器", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text("普通计算、科学函数和常用单位换算均在本地完成。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("算式、科学函数和常用单位换算，一处就能完成。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

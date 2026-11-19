@@ -13,14 +13,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
 import okhttp3.OkHttpClient
-import win.iqwqi.xiangece.core.offline.OfflinePackArchive
 import win.iqwqi.xiangece.core.offline.ResumableHttpFileDownloader
 import java.util.concurrent.TimeUnit
 
@@ -56,6 +59,8 @@ data class DitingOfflinePackState(
     val bundled: Boolean = false,
     val paused: Boolean = false,
     val errorMessage: String? = null,
+    val selectedPackId: String = DitingOfflinePackCatalog.SENSE_VOICE_ID,
+    val installedPackIds: Set<String> = emptySet(),
 ) {
     val progress: Float
         get() = if (totalBytes <= 0L) 0f else (downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 1f)
@@ -63,10 +68,22 @@ data class DitingOfflinePackState(
 
 object DitingOfflinePackCatalog {
     const val CHINESE_PARAFORMER_ID = "sherpa_streaming_paraformer_zh_en_int8"
+    const val SENSE_VOICE_ID = "sherpa_sense_voice_small_int8"
+    const val FUN_ASR_NANO_ID = "sherpa_funasr_nano_int8"
+    val senseVoice: DitingOfflinePack get() = DitingModernPacks.senseVoice
+    val funAsrNano: DitingOfflinePack get() = DitingModernPacks.funAsrNano
+    val packs: List<DitingOfflinePack> get() = listOf(senseVoice, funAsrNano, chineseParaformer)
+    fun find(id: String): DitingOfflinePack? = packs.firstOrNull { it.id == id }
+
+    fun initialSelection(saved: String?, installedIds: Set<String>): String = when {
+        saved != null && find(saved) != null -> saved
+        CHINESE_PARAFORMER_ID in installedIds -> CHINESE_PARAFORMER_ID
+        else -> SENSE_VOICE_ID
+    }
     val chineseParaformer = DitingOfflinePack(
         id = CHINESE_PARAFORMER_ID,
-        title = "中文/英文专业离线识别包",
-        description = "免费、本机运行、中文优先，支持 English、中英混合和部分中文方言；约 226 MiB（下载约 237 MB）。",
+        title = "中英双语 · Paraformer",
+        description = "适合中文和英文课堂。可下载使用，也可导入资源包。",
         totalBytes = 165_462_184L + 71_664_561L + 75_756L,
         files = listOf(
             DitingOfflinePackFile(
@@ -112,17 +129,21 @@ class DitingOfflinePackManager @Inject constructor(
     private val httpClient: OkHttpClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val preferences = context.getSharedPreferences("diting-offline-selection", Context.MODE_PRIVATE)
+    @Volatile private var selectedId = DitingOfflinePackCatalog.initialSelection(
+        preferences.getString("selectedPackId", null), installedIds(),
+    )
     private val _state = MutableStateFlow(readInstalledState())
     val state: StateFlow<DitingOfflinePackState> = _state.asStateFlow()
+    private val verificationMutex = Mutex()
+    @Volatile private var verifiedInstallFingerprint: String? = null
 
     init {
-        if (_state.value.installed) {
-            scope.launch {
-                if (!verifyInstalledFiles()) markCorrupted()
-            }
-        }
+        preferences.edit().putString("selectedPackId", selectedId).apply()
+        // Full hashing runs before loading the recognizer. Do not reread a large
+        // optional model at every app launch, including when only using the timetable.
     }
-    private var downloadJob: Job? = null
+    @Volatile private var downloadJob: Job? = null
     @Volatile private var activeCall: Call? = null
     private val downloadClient = httpClient.newBuilder()
         .connectTimeout(12, TimeUnit.SECONDS)
@@ -133,45 +154,89 @@ class DitingOfflinePackManager @Inject constructor(
 
     fun isChinesePackInstalled(): Boolean = _state.value.installed && modelDirectory().isDirectory
 
+    fun selectedPack(): DitingOfflinePack = requireNotNull(DitingOfflinePackCatalog.find(selectedId))
+
+    @Synchronized
+    fun selectPack(id: String): Boolean {
+        if (DitingOfflinePackCatalog.find(id) == null || downloadJob != null) return false
+        if (!preferences.edit().putString("selectedPackId", id).commit()) return false
+        selectedId = id
+        verifiedInstallFingerprint = null
+        _state.value = readInstalledState()
+        return true
+    }
+
     private fun hasBundledPack(): Boolean = runCatching {
+        if (selectedId != DitingOfflinePackCatalog.CHINESE_PARAFORMER_ID) return@runCatching false
         context.assets.open(BUNDLED_ASSET_PATH).close()
         true
     }.getOrDefault(false)
 
+    @Synchronized
     fun startChineseDownload() {
-        if (downloadJob?.isActive == true || isChinesePackInstalled()) return
+        if (downloadJob != null || isChinesePackInstalled()) return
+        val pack = selectedPack()
+        _state.value = _state.value.copy(downloading = true, paused = false, errorMessage = null, currentFile = "正在检查资源")
         val job = scope.launch {
-            if (hasBundledPack()) importBundledPack() else install(DitingOfflinePackCatalog.chineseParaformer)
+            if (hasBundledPack()) importBundledPack() else install(pack)
         }
         downloadJob = job
-        job.invokeOnCompletion { if (downloadJob === job) downloadJob = null }
+        finishOperation(job)
     }
 
+    @Synchronized
     fun cancelDownload() {
+        val job = downloadJob ?: return
+        job.cancel()
         activeCall?.cancel()
-        downloadJob?.cancel()
-        _state.value = _state.value.copy(downloading = false, paused = true, errorMessage = null)
+        _state.value = _state.value.copy(paused = true, errorMessage = null)
     }
 
+    @Synchronized
     fun importChinesePack(uri: Uri) {
-        if (downloadJob?.isActive == true || isChinesePackInstalled()) return
+        if (downloadJob != null || isChinesePackInstalled()) return
+        _state.value = _state.value.copy(downloading = true, paused = false, errorMessage = null, currentFile = "本地 ZIP")
         val job = scope.launch { importPack(uri) }
         downloadJob = job
-        job.invokeOnCompletion { if (downloadJob === job) downloadJob = null }
+        finishOperation(job)
     }
+
+    private fun finishOperation(job: Job) {
+        job.invokeOnCompletion { error ->
+            synchronized(this) {
+                if (downloadJob === job) {
+                    downloadJob = null
+                    activeCall = null
+                    _state.value = _state.value.copy(
+                        downloading = false, currentFile = "",
+                        paused = error is CancellationException || _state.value.paused,
+                    )
+                }
+            }
+        }
+    }
+    @Synchronized
     fun deleteChinesePack() {
-        if (downloadJob?.isActive == true) return
-        modelDirectory().deleteRecursively()
-        _state.value = DitingOfflinePackState(totalBytes = DitingOfflinePackCatalog.chineseParaformer.totalBytes)
+        if (downloadJob != null) return
+        val deleted = modelDirectory().deleteRecursively()
+        verifiedInstallFingerprint = null
+        _state.value = readInstalledState().copy(errorMessage = if (deleted) null else "部分资源未能删除，请稍后重试")
     }
 
-    fun modelDirectory(): File = File(context.filesDir, "diting-offline/${DitingOfflinePackCatalog.CHINESE_PARAFORMER_ID}")
+    fun modelDirectory(packId: String = selectedId): File {
+        require(DitingOfflinePackCatalog.find(packId) != null) { "未知的离线语音包" }
+        return File(context.filesDir, "diting-offline/$packId")
+    }
 
-    fun markCorrupted(message: String = "离线语音包校验失败，请重新导入或下载") {
-        val target = modelDirectory()
+    @Synchronized
+    fun markCorrupted(message: String = "离线语音包校验失败，请重新导入或下载", packId: String = selectedId) {
+        val target = modelDirectory(packId)
+        verifiedInstallFingerprint = null
         File(target, INSTALL_MARKER).delete()
-        DitingOfflinePackCatalog.chineseParaformer.files.forEach { file ->
-            File(target, file.name).delete()
+        // Keep good files for a later repair; the downloader verifies and replaces only bad files.
+        if (selectedId != packId) {
+            _state.value = _state.value.copy(installedPackIds = installedIds())
+            return
         }
         _state.value = readInstalledState().copy(
             installed = false,
@@ -181,18 +246,25 @@ class DitingOfflinePackManager @Inject constructor(
         )
     }
 
-    suspend fun verifyInstalledFiles(): Boolean = withContext(Dispatchers.IO) {
-        if (!_state.value.installed) return@withContext false
-        DitingOfflinePackCatalog.chineseParaformer.files.all { file ->
-            val candidate = File(modelDirectory(), file.name)
-            candidate.isFile && candidate.length() == file.bytes && sha256(candidate) == file.sha256
+    suspend fun verifyInstalledFiles(packId: String = selectedId): Boolean = withContext(Dispatchers.IO) {
+        val currentFingerprint = installedFingerprint(packId) ?: return@withContext false
+        if (verifiedInstallFingerprint == currentFingerprint) return@withContext true
+        verificationMutex.withLock {
+            val lockedFingerprint = installedFingerprint(packId) ?: return@withLock false
+            if (verifiedInstallFingerprint == lockedFingerprint) return@withLock true
+            val valid = requireNotNull(DitingOfflinePackCatalog.find(packId)).files.all { file ->
+                val candidate = File(modelDirectory(packId), file.name)
+                candidate.isFile && sha256(candidate) == file.sha256
+            }
+            verifiedInstallFingerprint = lockedFingerprint.takeIf { valid }
+            valid
         }
     }
 
     private suspend fun importBundledPack() {
         val temporaryZip = File(context.cacheDir, "diting-bundled-pack.zip")
         try {
-            _state.value = _state.value.copy(downloading = true, paused = false, currentFile = "正在读取内置离线包", totalBytes = DitingOfflinePackCatalog.chineseParaformer.totalBytes, errorMessage = null)
+            _state.value = _state.value.copy(downloading = true, paused = false, currentFile = "正在读取内置离线包", totalBytes = selectedPack().totalBytes, errorMessage = null)
             context.assets.open(BUNDLED_ASSET_PATH).use { input ->
                 temporaryZip.outputStream().use { output -> input.copyTo(output) }
             }
@@ -209,27 +281,31 @@ class DitingOfflinePackManager @Inject constructor(
     }
 
     private suspend fun importPack(uri: Uri) {
-        val pack = DitingOfflinePackCatalog.chineseParaformer
+        val pack = selectedPack()
         val target = modelDirectory()
         val staging = File(target.parentFile, ".${pack.id}.import-${System.nanoTime()}")
         try {
-            _state.value = DitingOfflinePackState(
+            _state.value = readInstalledState().copy(
                 downloading = true,
+                paused = false,
                 currentFile = "本地 ZIP",
                 totalBytes = pack.totalBytes,
             )
-            val expected = pack.files.associate { it.name to it.bytes }
-            val extracted = OfflinePackArchive.extract(context.contentResolver, uri, staging, expected)
+            val operationContext = coroutineContext
+            val extracted = context.contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "无法读取所选离线资源" }
+                DitingPackFiles.extract(input, staging, pack) { operationContext.ensureActive() }
+            }
             target.mkdirs()
             File(target, INSTALL_MARKER).delete()
             var imported = 0L
             pack.files.forEach { file ->
+                coroutineContext.ensureActive()
                 val source = extracted.getValue(file.name)
-                check(source.length() == file.bytes && sha256(source) == file.sha256) {
-                    "离线资源校验失败：${file.name}"
-                }
                 val part = File(target, file.name + ".part")
-                source.copyTo(part, overwrite = true)
+                check(part.parentFile!!.mkdirs() || part.parentFile!!.isDirectory)
+                if (part.exists()) check(part.delete())
+                check(source.renameTo(part)) { "无法安装资源文件：${file.name}" }
                 promotePart(part, File(target, file.name), file.name)
                 imported += file.bytes
                 _state.value = _state.value.copy(
@@ -242,11 +318,7 @@ class DitingOfflinePackManager @Inject constructor(
             markerPart.writeText(pack.id, Charsets.UTF_8)
             if (marker.exists()) marker.delete()
             check(markerPart.renameTo(marker)) { "无法写入模型安装标记" }
-            _state.value = DitingOfflinePackState(
-                installed = true,
-                downloadedBytes = pack.totalBytes,
-                totalBytes = pack.totalBytes,
-            )
+            _state.value = readInstalledState()
         } catch (cancelled: CancellationException) {
             _state.value = _state.value.copy(downloading = false, paused = true, currentFile = "")
             throw cancelled
@@ -264,9 +336,10 @@ class DitingOfflinePackManager @Inject constructor(
     }
 
     private suspend fun install(pack: DitingOfflinePack) {
-        val target = modelDirectory()
-        target.mkdirs()
-        var downloaded = pack.files.sumOf { file ->
+        val target = modelDirectory(pack.id)
+        try {
+            check(target.mkdirs() || target.isDirectory) { "无法创建模型目录" }
+            var downloaded = pack.files.sumOf { file ->
             val finalFile = File(target, file.name)
             if (finalFile.isFile && finalFile.length() == file.bytes && sha256(finalFile) == file.sha256) {
                 file.bytes
@@ -277,10 +350,10 @@ class DitingOfflinePackManager @Inject constructor(
                     ?.coerceAtMost(file.bytes)
                     ?: 0L
             }
-        }
-        _state.value = DitingOfflinePackState(downloading = true, paused = false, downloadedBytes = downloaded, totalBytes = pack.totalBytes)
-        try {
+            }
+            _state.value = readInstalledState().copy(downloading = true, paused = false, downloadedBytes = downloaded, totalBytes = pack.totalBytes)
             for (file in pack.files) {
+                coroutineContext.ensureActive()
                 val finalFile = File(target, file.name)
                 val before = if (finalFile.isFile && finalFile.length() == file.bytes && sha256(finalFile) == file.sha256) {
                     file.bytes
@@ -306,7 +379,7 @@ class DitingOfflinePackManager @Inject constructor(
             markerPart.writeText(pack.id, Charsets.UTF_8)
             if (marker.exists()) check(marker.delete()) { "无法更新模型安装标记" }
             check(markerPart.renameTo(marker)) { "无法写入模型安装标记" }
-            _state.value = DitingOfflinePackState(installed = true, downloadedBytes = pack.totalBytes, totalBytes = pack.totalBytes)
+            _state.value = readInstalledState()
         } catch (cancelled: CancellationException) {
             _state.value = _state.value.copy(downloading = false, currentFile = "", paused = true, errorMessage = null)
             throw cancelled
@@ -317,7 +390,8 @@ class DitingOfflinePackManager @Inject constructor(
     }
 
     private suspend fun downloadAndVerify(file: DitingOfflinePackFile, target: File, onProgress: (Long) -> Unit) = withContext(Dispatchers.IO) {
-        val finalFile = File(target, file.name)
+        val finalFile = DitingPackFiles.destination(target, file.name)
+        check(finalFile.parentFile!!.mkdirs() || finalFile.parentFile!!.isDirectory)
         if (finalFile.isFile) {
             if (finalFile.length() == file.bytes && sha256(finalFile) == file.sha256) return@withContext
             finalFile.delete()
@@ -343,13 +417,14 @@ class DitingOfflinePackManager @Inject constructor(
         promotePart(partFile, finalFile, file.name)
     }
     private fun promotePart(partFile: File, finalFile: File, name: String) {
+        if (finalFile.exists()) check(finalFile.delete()) { "无法替换模型文件: " + name }
         if (!partFile.renameTo(finalFile)) {
             partFile.copyTo(finalFile, overwrite = true)
             check(partFile.delete()) { "无法清理临时模型文件: " + name }
         }
     }
     private fun readInstalledState(): DitingOfflinePackState {
-        val pack = DitingOfflinePackCatalog.chineseParaformer
+        val pack = selectedPack()
         val target = modelDirectory()
         val downloaded = pack.files.sumOf { file ->
             val finalFile = File(target, file.name)
@@ -362,27 +437,41 @@ class DitingOfflinePackManager @Inject constructor(
                     ?: 0L
             }
         }
-        val marker = File(target, INSTALL_MARKER)
-        val markerValid = marker.isFile && runCatching { marker.readText(Charsets.UTF_8).trim() == pack.id }.getOrDefault(false)
-        val installed = markerValid && downloaded == pack.totalBytes
+        val installedIds = installedIds()
+        val installed = pack.id in installedIds
         return DitingOfflinePackState(
             installed = installed,
             bundled = hasBundledPack(),
             paused = !installed && downloaded > 0L,
             downloadedBytes = downloaded,
             totalBytes = pack.totalBytes,
+            selectedPackId = pack.id,
+            installedPackIds = installedIds,
         )
     }
-    private fun sha256(file: File): String {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(1024 * 1024)
-            var count: Int
-            while (input.read(buffer).also { count = it } >= 0) {
-                if (count > 0) digest.update(buffer, 0, count)
-            }
+    private fun installedIds(): Set<String> = DitingOfflinePackCatalog.packs
+        .filter { installedFingerprint(it.id) != null }.mapTo(linkedSetOf()) { it.id }
+
+    internal fun installedFingerprint(packId: String): String? {
+        val pack = requireNotNull(DitingOfflinePackCatalog.find(packId))
+        val target = modelDirectory(packId)
+        val marker = File(target, INSTALL_MARKER)
+        val markerValid = marker.isFile && runCatching {
+            marker.readText(Charsets.UTF_8).trim() == pack.id
+        }.getOrDefault(false)
+        if (!markerValid) return null
+        val parts = mutableListOf(packId, marker.lastModified().toString())
+        for (expected in pack.files) {
+            val file = File(target, expected.name)
+            if (!file.isFile || file.length() != expected.bytes) return null
+            parts += "${expected.name}:${file.length()}:${file.lastModified()}"
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return parts.joinToString("|")
+    }
+
+    private suspend fun sha256(file: File): String {
+        val operationContext = coroutineContext
+        return DitingPackFiles.sha256(file) { operationContext.ensureActive() }
     }
     fun close() {
         activeCall?.cancel()

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.Button
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -59,18 +61,23 @@ fun DraftEditorDialog(
     onConfirm: () -> Unit,
 ) {
     var confirmAi by remember { mutableStateOf(false) }
+    var showSourceImage by remember(editor.inboxId) { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val validationError = DraftConfirmationValidator.error(
         editor.confirmationFields(),
         semesterWeekCount,
     )
     AppFormSheet(
         title = "确认草稿",
-        subtitle = "只有确认后才会写入日程",
+        subtitle = if (editor.remainingDraftCount > 0) "本件确认后还有 ${editor.remainingDraftCount} 件待核对；取消会保留在收件箱" else "只有确认后才会写入日程",
         onConfirm = onConfirm,
         onDismiss = onDismiss,
         confirmLabel = "确认写入",
         confirmEnabled = validationError == null && !isWorking,
     ) {
+        editor.sourceImagePath?.let {
+            OutlinedButton(onClick = { showSourceImage = true }, modifier = Modifier.fillMaxWidth()) { Text("查看原图 · 可放大核对") }
+        }
         AppTextField(
             value = editor.sourceText,
             onValueChange = onSourceTextChange,
@@ -85,6 +92,27 @@ fun DraftEditorDialog(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("按修改后的原文重新解析")
+        }
+        OutlinedButton(onClick = {
+            val intent = android.content.Intent(context, win.iqwqi.xiangece.feature.notebook.ui.NotebookActivity::class.java)
+                .setAction(android.content.Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(android.content.Intent.EXTRA_TEXT, editor.sourceText.take(100_000))
+                .putExtra(android.content.Intent.EXTRA_SUBJECT, editor.title.take(100))
+            editor.sourceImagePath?.let { path ->
+                val image = java.io.File(path)
+                if (image.isFile) runCatching {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".fileprovider", image)
+                    intent.setType(context.contentResolver.getType(uri) ?: "image/jpeg")
+                        .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }.onFailure {
+                    android.widget.Toast.makeText(context, "原图未能关联，此次只收集文字", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            context.startActivity(intent)
+        }, enabled = !isWorking && editor.sourceText.isNotBlank() && editor.sourceText.length <= 100_000, modifier = Modifier.fillMaxWidth()) {
+            Text("作为资料存到笔记库")
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(
@@ -148,11 +176,15 @@ fun DraftEditorDialog(
                     editor.draft.ambiguities.forEach { Text("• $it") }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().toggleable(
+                            value = editor.ambiguitiesAcknowledged,
+                            role = Role.Checkbox,
+                            onValueChange = onAmbiguitiesAcknowledged,
+                        ),
                     ) {
                         Checkbox(
                             checked = editor.ambiguitiesAcknowledged,
-                            onCheckedChange = onAmbiguitiesAcknowledged,
+                            onCheckedChange = null,
                         )
                         Text("我已逐项核对并确认")
                     }
@@ -160,7 +192,7 @@ fun DraftEditorDialog(
             }
         }
         Text(
-            "识别置信度 ${(editor.draft.confidence * 100).toInt()}%",
+            "结构化结果仅供核对，请以原图和原文为准",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -174,11 +206,14 @@ fun DraftEditorDialog(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Outlined.AutoAwesome, contentDescription = null)
-                Text(" 使用 AI 增强")
+                Text("智能整理")
             }
         }
     }
 
+    if (showSourceImage) editor.sourceImagePath?.let {
+        win.iqwqi.xiangece.ui.components.SourceImagePreview(it) { showSourceImage = false }
+    }
     if (confirmAi) {
         AppConfirmDialog(
             title = "发送 OCR 文字？",

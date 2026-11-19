@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="startup_background">#F3F5FF</color>
+    <color name="startup_light_background">#F3F5FF</color>
+    <color name="startup_dark_background">#18192B</color>
+    <bool name="startup_light_system_bars">true</bool>
+    <style name="Theme.Xiangece.StartingSystem" parent="Theme.Xiangece">
+        <item name="android:windowLightStatusBar">@bool/startup_light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/startup_light_system_bars</item>
+        <item name="android:colorBackground">@color/startup_background</item>
+        <item name="android:windowBackground">@drawable/splash_window_background</item>
+        <item name="android:windowSplashScreenBackground">@color/startup_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_character_icon</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/splash_branding</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+    </style>
+    <style name="Theme.Xiangece.StartingLight" parent="Theme.Xiangece.StartingSystem">
+        <item name="android:colorBackground">@color/startup_light_background</item>
+        <item name="android:windowSplashScreenBackground">@color/startup_light_background</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/splash_branding_light</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+    <style name="Theme.Xiangece.StartingDark" parent="Theme.Xiangece.StartingSystem">
+        <item name="android:colorBackground">@color/startup_dark_background</item>
+        <item name="android:windowSplashScreenBackground">@color/startup_dark_background</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/splash_branding_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

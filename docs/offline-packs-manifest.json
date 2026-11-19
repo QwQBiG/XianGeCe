@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "packs": [
+    {
+      "id": "pp_ocrv5_mobile_zh_en_onnx",
+      "title": "中文 OCR · 轻量",
+      "suggestedZipName": "ocr-zh-en.zip",
+      "totalBytes": 21509645,
+      "files": [
+        {
+          "localName": "det.onnx",
+          "bytes": 4826518,
+          "sha256": "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/e6f4fa85f00e168c862bc462aebca69eef9b3d3d/inference.onnx?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/e6f4fa85f00e168c862bc462aebca69eef9b3d3d/inference.onnx?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+          "sourceRevision": "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_mobile_det_onnx?blobs=true",
+          "hashEvidence": "Official Hugging Face API siblings[].lfs.sha256 (not Xet hash)"
+        },
+        {
+          "localName": "rec.onnx",
+          "bytes": 16534782,
+          "sha256": "da72dc72ca4dc220df0dfde68c1dedc31c58d3e76a25871122e5056227d50092",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/ed152b8b495f84de93cda5709d768548a9127622/inference.onnx?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/ed152b8b495f84de93cda5709d768548a9127622/inference.onnx?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+          "sourceRevision": "ed152b8b495f84de93cda5709d768548a9127622",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_mobile_rec_onnx?blobs=true",
+          "hashEvidence": "Official Hugging Face API siblings[].lfs.sha256 (not Xet hash)"
+        },
+        {
+          "localName": "rec.yml",
+          "bytes": 148345,
+          "sha256": "5dfeb2777f6d0db8177d8128a8acfcf6e6276dc4ac73ea3bf0dc06d6a5e85d8e",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/ed152b8b495f84de93cda5709d768548a9127622/inference.yml?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/ed152b8b495f84de93cda5709d768548a9127622/inference.yml?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+          "sourceRevision": "ed152b8b495f84de93cda5709d768548a9127622",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_mobile_rec_onnx?blobs=true",
+          "hashEvidence": "SHA-256 computed from the official revision-pinned UTF-8 file bytes"
+        }
+      ],
+      "kind": "ocr",
+      "licenseNote": "PaddlePaddle PP-OCRv5 ONNX model cards declare Apache-2.0. Original PaddlePaddle copyrights apply. Converted model weights are third-party resources."
+    },
+    {
+      "id": "pp_ocrv5_server_zh_en_onnx",
+      "title": "中文 OCR · 增强",
+      "suggestedZipName": "ocr-zh-en-server.zip",
+      "totalBytes": 172768163,
+      "files": [
+        {
+          "localName": "det.onnx",
+          "bytes": 88116791,
+          "sha256": "10803475a591f7dc623e24670fb5752ec94d39a1f8cf069aac1b6f0ce19cfc85",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_server_det_onnx/resolve/dcf248c4dcc064c6d030db241255f9e8fbc6733a/inference.onnx?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_server_det_onnx/resolve/dcf248c4dcc064c6d030db241255f9e8fbc6733a/inference.onnx?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_server_det_onnx",
+          "sourceRevision": "dcf248c4dcc064c6d030db241255f9e8fbc6733a",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_server_det_onnx?blobs=true",
+          "hashEvidence": "Official Hugging Face API siblings[].lfs.sha256 (not Xet hash)"
+        },
+        {
+          "localName": "rec.onnx",
+          "bytes": 84503027,
+          "sha256": "d9dc333c9c7b042c6dffb8e33d72b6f65c9c1d463d0a3c2f78174fea55e94752",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_server_rec_onnx/resolve/b70df217f4fd99d14f970bad092cebe7d74cc4d1/inference.onnx?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_server_rec_onnx/resolve/b70df217f4fd99d14f970bad092cebe7d74cc4d1/inference.onnx?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_server_rec_onnx",
+          "sourceRevision": "b70df217f4fd99d14f970bad092cebe7d74cc4d1",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_server_rec_onnx?blobs=true",
+          "hashEvidence": "Official Hugging Face API siblings[].lfs.sha256 (not Xet hash)"
+        },
+        {
+          "localName": "rec.yml",
+          "bytes": 148345,
+          "sha256": "2c719dba044c4e2228aef8ff92f5f575394d75d24c16de096a33b7cfd902f66d",
+          "officialUrl": "https://huggingface.co/PaddlePaddle/PP-OCRv5_server_rec_onnx/resolve/b70df217f4fd99d14f970bad092cebe7d74cc4d1/inference.yml?download=true",
+          "domesticUrl": "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_server_rec_onnx/resolve/b70df217f4fd99d14f970bad092cebe7d74cc4d1/inference.yml?download=true",
+          "sourceRepository": "PaddlePaddle/PP-OCRv5_server_rec_onnx",
+          "sourceRevision": "b70df217f4fd99d14f970bad092cebe7d74cc4d1",
+          "metadataUrl": "https://huggingface.co/api/models/PaddlePaddle/PP-OCRv5_server_rec_onnx?blobs=true",
+          "hashEvidence": "SHA-256 computed from the official revision-pinned UTF-8 file bytes"
+        }
+      ],
+      "kind": "ocr",
+      "licenseNote": "PaddlePaddle PP-OCRv5 ONNX model cards declare Apache-2.0. Original PaddlePaddle copyrights apply. Converted model weights are third-party resources."
+    },
+    {
+      "repo": "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+      "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+      "totalBytes": 239549735,
+      "files": [
+        {
+          "localName": "model.int8.onnx",
+          "bytes": 239233841,
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "tokens.txt",
+          "bytes": 315894,
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+          "verification": "downloaded official bytes and computed SHA-256"
+        }
+      ],
+      "id": "sherpa_sense_voice_small_int8",
+      "kind": "speech",
+      "suggestedZipName": "diting-sensevoice-int8.zip",
+      "legacy": false,
+      "modelLicense": "FunASR-model-1.1",
+      "modelLicenseUrl": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+      "modelSourceUrl": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+      "licenseNote": "SenseVoiceSmall is a third-party model by FunAudioLLM/Alibaba, converted by sherpa-onnx contributors. Model weights use the upstream FunASR Model Open Source License v1.1 included as MODEL_LICENSE.txt, not Apache-2.0. The separate Apache text covers applicable runtime/conversion components. Preserve attribution and model terms when redistributing."
+    },
+    {
+      "repo": "sherpa-onnx-funasr-nano-int8-2025-12-30",
+      "revision": "6f16bd378457e13f36ccf3910df9017f96c346fb",
+      "totalBytes": 1009605061,
+      "files": [
+        {
+          "localName": "Qwen3-0.6B/merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/merges.txt",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/merges.txt",
+          "verification": "downloaded official bytes and computed SHA-256"
+        },
+        {
+          "localName": "Qwen3-0.6B/tokenizer.json",
+          "bytes": 11422654,
+          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/tokenizer.json",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/tokenizer.json",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "Qwen3-0.6B/vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/vocab.json",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/Qwen3-0.6B/vocab.json",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "embedding.int8.onnx",
+          "bytes": 155584380,
+          "sha256": "95e61cd0c9c3b9543339a4cf973c95c116815e745ccc1e0285cbd81f76d18644",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/embedding.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/embedding.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "encoder_adaptor.int8.onnx",
+          "bytes": 237792748,
+          "sha256": "f36dea2e30fbc33b5db1d7a7265cc976c5e5586c77b042d5adb1ad27c72db422",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/encoder_adaptor.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/encoder_adaptor.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "llm.int8.onnx",
+          "bytes": 600356593,
+          "sha256": "dfbf9aa3be41bccc257587f151e15c63fbe1b549f2b517f5ccd5bdce3bf4322a",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/llm.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/resolve/6f16bd378457e13f36ccf3910df9017f96c346fb/llm.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        }
+      ],
+      "id": "sherpa_funasr_nano_int8",
+      "kind": "speech",
+      "suggestedZipName": "diting-funasr-nano-int8.zip",
+      "legacy": false,
+      "modelLicense": "Apache-2.0",
+      "modelSourceUrl": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512",
+      "licenseNote": "Fun-ASR-Nano-2512 by FunAudioLLM/Alibaba declares Apache-2.0. This package uses the pinned int8 ONNX conversion by sherpa-onnx contributors and Qwen3 tokenizer assets. Original third-party copyrights and Apache-2.0 attribution apply. Sources and hashes accompany this package."
+    },
+    {
+      "repo": "sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+      "revision": "8e40c43232a1c5c66c82111efc5820d3accca11b",
+      "totalBytes": 237202501,
+      "files": [
+        {
+          "localName": "decoder.int8.onnx",
+          "bytes": 71664561,
+          "sha256": "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/decoder.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/decoder.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "encoder.int8.onnx",
+          "bytes": 165462184,
+          "sha256": "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/encoder.int8.onnx",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/encoder.int8.onnx",
+          "verification": "upstream Git LFS SHA-256 object id and size at pinned revision"
+        },
+        {
+          "localName": "tokens.txt",
+          "bytes": 75756,
+          "sha256": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
+          "officialUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/tokens.txt",
+          "domesticUrl": "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/8e40c43232a1c5c66c82111efc5820d3accca11b/tokens.txt",
+          "verification": "downloaded official bytes and computed SHA-256"
+        }
+      ],
+      "id": "sherpa_streaming_paraformer_zh_en_int8",
+      "kind": "speech",
+      "suggestedZipName": "diting-zh-en-int8.zip",
+      "legacy": true,
+      "licenseNote": "Third-party models from FunAudioLLM/Alibaba, converted by sherpa-onnx contributors. Keep upstream attribution and review the model source license before redistribution. Sources and pinned hashes accompany this package."
+    }
+  ]
+}

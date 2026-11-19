@@ -6,9 +6,11 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowBackground">@drawable/splash_window_background</item>
-        <item name="android:windowSplashScreenBackground">#FCF7EF</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_transparent_icon</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">#FCF7EF</item>
-        <item name="android:windowSplashScreenAnimationDuration">420</item>
+        <item name="android:colorBackground">@color/startup_background</item>
+        <item name="android:windowSplashScreenBackground">@color/startup_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_character_icon</item>
+        <item name="android:windowSplashScreenBrandingImage">@drawable/splash_branding</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

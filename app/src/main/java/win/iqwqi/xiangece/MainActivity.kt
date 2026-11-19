@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -25,6 +27,7 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import win.iqwqi.xiangece.core.backup.BackupManager
 import win.iqwqi.xiangece.core.update.AppUpdateManifest
 import win.iqwqi.xiangece.core.update.AppUpdateRepository
@@ -33,6 +36,7 @@ import win.iqwqi.xiangece.ui.MainViewModel
 import win.iqwqi.xiangece.ui.XiangeceRoot
 import win.iqwqi.xiangece.ui.components.AppUpdateDialog
 import win.iqwqi.xiangece.ui.theme.XiangeceTheme
+import win.iqwqi.xiangece.ui.theme.StartupAppearance
 import win.iqwqi.xiangece.widget.XiangeceWidgetProvider
 
 @AndroidEntryPoint
@@ -44,9 +48,29 @@ class MainActivity : ComponentActivity() {
     private var updateState by mutableStateOf<AppUpdateState>(AppUpdateState.Idle)
     private var pendingBackupUpdate by mutableStateOf<AppUpdateManifest?>(null)
     private var checkedForForeground = false
+    private var firstFrameReady = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(StartupAppearance.cachedTheme(this))
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 31) {
+            splashScreen.setOnExitAnimationListener { it.remove() }
+        }
+        val content = findViewById<android.view.View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (!firstFrameReady) return false
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                return true
+            }
+        })
+        // Readiness must not depend on a Compose SideEffect: an initially empty
+        // composition can stop requesting frames while the system splash is held.
+        lifecycleScope.launch {
+            viewModel.uiState.first { it.dataReady }
+            firstFrameReady = true
+            content.postInvalidateOnAnimation()
+        }
         enableEdgeToEdge()
         window.navigationBarColor = Color.TRANSPARENT
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -56,18 +80,24 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
+            if (!state.dataReady) return@setContent
             val useDarkTheme = if (state.settings.followSystemTheme) isSystemInDarkTheme() else state.settings.darkMode
+            LaunchedEffect(state.settings.darkMode, state.settings.followSystemTheme) {
+                StartupAppearance.persist(this@MainActivity, state.settings)
+            }
             val backupLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.CreateDocument("application/zip"),
             ) { uri -> finishBackupAndContinue(uri) }
             XiangeceTheme(
                 darkTheme = useDarkTheme,
                 themeSeedId = state.settings.themeSeed,
+                companion = state.settings.companion,
             ) {
                 val navigationSurface = MaterialTheme.colorScheme.surface.toArgb()
-                val contentBackground = MaterialTheme.colorScheme.background.toArgb()
                 SideEffect {
-                    window.statusBarColor = contentBackground
+                    firstFrameReady = true
+                    window.statusBarColor = Color.TRANSPARENT
+                    if (android.os.Build.VERSION.SDK_INT >= 29) window.isStatusBarContrastEnforced = false
                     window.navigationBarColor = navigationSurface
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = !useDarkTheme
@@ -94,7 +124,7 @@ class MainActivity : ComponentActivity() {
             }
             LaunchedEffect(Unit) {
                 viewModel.handleIntent(intent)
-                setIntent(Intent())
+                clearHandledShare()
             }
         }
     }
@@ -104,7 +134,21 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra("open_my_resources", false)) openMyResources = true
         setIntent(intent)
         viewModel.handleIntent(intent)
-        setIntent(Intent())
+        clearHandledShare()
+    }
+
+    private fun clearHandledShare() {
+        if (intent?.action != Intent.ACTION_SEND) return
+        // Retain the component and navigation metadata used to recreate this activity.
+        setIntent(Intent(intent).apply {
+            action = Intent.ACTION_MAIN
+            setDataAndType(null, null)
+            clipData = null
+            removeExtra(Intent.EXTRA_TEXT)
+            removeExtra(Intent.EXTRA_STREAM)
+            removeExtra(Intent.EXTRA_SUBJECT)
+            removeExtra(Intent.EXTRA_TITLE)
+        })
     }
 
     override fun onStart() {

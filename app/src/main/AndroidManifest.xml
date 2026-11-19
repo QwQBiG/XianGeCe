@@ -40,6 +40,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:theme="@style/Theme.Xiangece.StartingLight"
             android:exported="true"
             android:launchMode="singleTop">
             <intent-filter>
@@ -65,25 +66,37 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:theme="@style/Theme.Xiangece" />
+            android:theme="@style/Theme.Xiangece.Secondary" />
 
         <activity
             android:name=".ui.screens.ExpenseActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:theme="@style/Theme.Xiangece" />
+            android:theme="@style/Theme.Xiangece.Secondary" />
 
         <activity
             android:name=".feature.diting.ui.DitingActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:theme="@style/Theme.Xiangece" />
+            android:theme="@style/Theme.Xiangece.Secondary" />
 
         <service
             android:name=".feature.diting.audio.DitingRecorderService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+        <activity
+            android:name=".feature.notebook.ui.NotebookActivity"
+            android:label="存入弦歌册笔记"
+            android:exported="true"
+            android:theme="@style/Theme.Xiangece.Secondary">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

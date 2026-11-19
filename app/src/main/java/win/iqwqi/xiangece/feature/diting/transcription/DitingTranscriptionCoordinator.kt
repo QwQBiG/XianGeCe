@@ -5,11 +5,13 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -47,7 +49,13 @@ class DitingTranscriptionCoordinator @Inject constructor(
     val asyncSignals: SharedFlow<DitingAsyncSignalBatch> = _asyncSignals.asSharedFlow()
     private val pendingMutex = Mutex()
     private val aiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val aiJobs = mutableMapOf<Long, MutableSet<Job>>()
+    private class AiWorker(val session: DitingSessionEntity, firstSequence: Int) {
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        var nextSequence = firstSequence
+        @Volatile var latestSequence = firstSequence
+        var job: Job? = null
+    }
+    private val aiWorkers = mutableMapOf<Long, AiWorker>()
     private val aiPersistenceMutex = Mutex()
     private val pendingSequences = mutableMapOf<Long, ArrayDeque<Int>>()
     private val pendingEvents = mutableMapOf<Long, ArrayDeque<TranscriptEvent>>()
@@ -59,6 +67,7 @@ class DitingTranscriptionCoordinator @Inject constructor(
         languageMode: String,
         cloudTranscriptionEnabled: Boolean,
         transcriptionEnabled: Boolean = cloudTranscriptionEnabled,
+        expectsRecognizerEvents: Boolean = true,
     ): List<DitingSignal> {
         val previous = repository.findSegment(sessionId, chunk.sequence)
         repository.upsertSegment(
@@ -77,7 +86,7 @@ class DitingTranscriptionCoordinator @Inject constructor(
                 language = languageMode,
             ),
         )
-        if (!transcriptionEnabled) return emptyList()
+        if (!transcriptionEnabled || !expectsRecognizerEvents) return emptyList()
 
         val eventAndPartial = pendingMutex.withLock {
             val queue = pendingSequences.getOrPut(sessionId) { ArrayDeque() }
@@ -184,7 +193,8 @@ class DitingTranscriptionCoordinator @Inject constructor(
         if (!final) return emptyList()
         val session = repository.sessionSnapshot(sessionId) ?: return emptyList()
 
-        val previousText = precedingText(sessionId, segment, session.mode)
+        val previousSegments = precedingSegments(sessionId, segment)
+        val previousText = previousSegments.joinToString(" ") { it.text }
         val signals = signalAnalyzer.analyze(segment.text, session.mode, previousText)
         val existingMarkerTypes = repository.markersSnapshot(sessionId)
             .asSequence()
@@ -193,7 +203,7 @@ class DitingTranscriptionCoordinator @Inject constructor(
             .toSet()
         signals.forEach { signal ->
             if (signal.type.key in existingMarkerTypes) return@forEach
-            repository.addMarker(
+            repository.storeAutomaticMarker(
                 DitingMarkerEntity(
                     sessionId = sessionId,
                     segmentId = segment.id,
@@ -204,6 +214,7 @@ class DitingTranscriptionCoordinator @Inject constructor(
                     confidence = signal.confidence,
                     source = "local_rule",
                 ),
+                expectedTexts = (previousSegments + segment).associate { it.sequence to it.text },
             )
         }
 
@@ -212,10 +223,14 @@ class DitingTranscriptionCoordinator @Inject constructor(
 
     }
 
-    private suspend fun precedingText(sessionId: Long, segment: DitingSegmentEntity, mode: String): String {
-        if (segment.sequence <= 0) return ""
-        // 两种课堂都保留上一段，提问标记需要把问题的铺垫一起展示出来。
-        return repository.findSegment(sessionId, segment.sequence - 1)?.text.orEmpty()
+    private suspend fun precedingSegments(sessionId: Long, segment: DitingSegmentEntity): List<DitingSegmentEntity> {
+        if (segment.sequence <= 0) return emptyList()
+        // Keep original segment identities so edits can invalidate context-dependent results.
+        return (2 downTo 1)
+            .mapNotNull { offset ->
+                val sequence = segment.sequence - offset
+                if (sequence < 0) null else repository.findSegment(sessionId, sequence)?.takeIf { it.isFinal && it.text.isNotBlank() }
+            }
     }
 
     private fun markerNote(currentText: String, type: win.iqwqi.xiangece.feature.diting.domain.DitingMarkerType, previousText: String): String {
@@ -226,45 +241,63 @@ class DitingTranscriptionCoordinator @Inject constructor(
         return "上下文：$context\n提问内容：${currentText.take(240)}"
     }
 
-    private fun scheduleAiAnnotation(
-        session: DitingSessionEntity,
-        segment: DitingSegmentEntity,
-    ) {
-        if (!session.aiAnnotationEnabled) return
-        val annotator = aiAnnotator ?: return
-        val job = aiScope.launch {
-            val annotations = runCatching {
-                annotator.onTranscript(session, segment)
-            }.getOrDefault(emptyList())
-            val signals = persistAiAnnotations(session.id, annotations)
-            if (signals.isNotEmpty()) {
-                _asyncSignals.emit(DitingAsyncSignalBatch(session.id, signals))
+    private fun scheduleAiAnnotation(session: DitingSessionEntity, segment: DitingSegmentEntity) {
+        if (!session.aiAnnotationEnabled || aiAnnotator == null) return
+        synchronized(aiWorkers) {
+            val worker = aiWorkers.getOrPut(session.id) {
+                AiWorker(session, segment.sequence).also { value ->
+                    value.job = aiScope.launch { runAiWorker(value) }
+                }
             }
-        }
-        synchronized(aiJobs) { aiJobs.getOrPut(session.id) { mutableSetOf() }.add(job) }
-        job.invokeOnCompletion {
-            synchronized(aiJobs) {
-                aiJobs[session.id]?.remove(job)
-                if (aiJobs[session.id].isNullOrEmpty()) aiJobs.remove(session.id)
-            }
+            worker.latestSequence = maxOf(worker.latestSequence, segment.sequence)
+            worker.wake.trySend(Unit)
         }
     }
 
-    private suspend fun awaitAiAnnotations(sessionId: Long) {
-        val jobs = synchronized(aiJobs) { aiJobs[sessionId]?.toList().orEmpty() }
-        jobs.joinAll()
+    private suspend fun runAiWorker(worker: AiWorker) {
+        val annotator = aiAnnotator ?: return
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            // A quiet classroom still flushes the pending semantic batch within a bounded wait.
+            val wake = withTimeoutOrNull(35_000L) { worker.wake.receiveCatching() }
+            while (worker.nextSequence <= worker.latestSequence) {
+                val sequence = worker.nextSequence++
+                val segment = repository.findSegment(worker.session.id, sequence) ?: continue
+                if (!segment.isFinal || segment.text.isBlank()) continue
+                val annotations = safelyAnnotate {
+                    annotator.onTranscript(worker.session, segment, precedingSegments(worker.session.id, segment))
+                }
+                publishAiAnnotations(worker, annotations)
+            }
+            if (wake == null || wake.isClosed) {
+                publishAiAnnotations(worker, safelyAnnotate { annotator.flush(worker.session) })
+            }
+            if (wake?.isClosed == true) break
+        }
+    }
+
+    private suspend fun safelyAnnotate(block: suspend () -> List<DitingAiAnnotation>): List<DitingAiAnnotation> =
+        try {
+            block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+    private suspend fun publishAiAnnotations(worker: AiWorker, annotations: List<DitingAiAnnotation>) {
+        val signals = persistAiAnnotations(worker, annotations)
+        if (signals.isNotEmpty()) _asyncSignals.emit(DitingAsyncSignalBatch(worker.session.id, signals))
     }
     private suspend fun persistAiAnnotations(
-        sessionId: Long,
+        worker: AiWorker,
         annotations: List<DitingAiAnnotation>,
     ): List<DitingSignal> = aiPersistenceMutex.withLock {
         if (annotations.isEmpty()) return emptyList()
-        val existing = repository.markersSnapshot(sessionId)
+        val sessionId = worker.session.id
+        if (synchronized(aiWorkers) { aiWorkers[sessionId] !== worker } || worker.job?.isActive != true) return emptyList()
+        if (repository.sessionSnapshot(sessionId)?.aiAnnotationEnabled != true) return emptyList()
         return annotations.mapNotNull { annotation ->
             val segment = repository.findSegment(sessionId, annotation.sequence) ?: return@mapNotNull null
-            val existingAuto = existing.firstOrNull {
-                it.segmentId == segment.id && it.type == annotation.type.key
-            }
             val note = buildString {
                 if (annotation.note.isNotBlank()) append(annotation.note)
                 if (annotation.evidence.isNotBlank()) {
@@ -273,7 +306,6 @@ class DitingTranscriptionCoordinator @Inject constructor(
                 }
             }
             val marker = DitingMarkerEntity(
-                id = existingAuto?.id ?: 0,
                 sessionId = sessionId,
                 segmentId = segment.id,
                 positionMillis = segment.endMillis,
@@ -283,23 +315,23 @@ class DitingTranscriptionCoordinator @Inject constructor(
                 confidence = annotation.confidence,
                 source = "ai",
             )
-            if (existingAuto?.source != "ai" || existingAuto.title != marker.title || existingAuto.note != marker.note) {
-                repository.addMarker(marker)
-            }
-            DitingSignal(annotation.type, annotation.title, annotation.confidence)
+            val inserted = repository.storeAutomaticMarker(marker, annotation.expectedTexts, annotation.evidence)
+            if (inserted) DitingSignal(annotation.type, annotation.title, annotation.confidence) else null
         }
     }
 
     suspend fun flushAi(sessionId: Long): List<DitingSignal> {
-        val session = repository.sessionSnapshot(sessionId) ?: return emptyList()
-        if (!session.aiAnnotationEnabled) return emptyList()
-        return withTimeoutOrNull(AI_FLUSH_TIMEOUT_MILLIS) {
-            awaitAiAnnotations(sessionId)
-            val annotations = aiAnnotator?.let { annotator ->
-                runCatching { annotator.flush(session) }.getOrDefault(emptyList())
-            }.orEmpty()
-            persistAiAnnotations(sessionId, annotations)
-        }.orEmpty()
+        val worker = synchronized(aiWorkers) { aiWorkers[sessionId] } ?: return emptyList()
+        worker.wake.close()
+        val completed = withTimeoutOrNull(AI_FLUSH_TIMEOUT_MILLIS) { worker.job?.join(); true } ?: false
+        if (!completed) worker.job?.cancel()
+        aiPersistenceMutex.withLock {
+            synchronized(aiWorkers) {
+                if (aiWorkers[sessionId] === worker) aiWorkers.remove(sessionId)
+            }
+            aiAnnotator?.clear(sessionId)
+        }
+        return emptyList() // New events are emitted once by the worker.
     }
 
     /** Rebuilds only local-rule markers from saved text; manual and AI markers remain untouched. */
@@ -309,7 +341,8 @@ class DitingTranscriptionCoordinator @Inject constructor(
         val markers = mutableListOf<DitingMarkerEntity>()
         val signals = mutableListOf<DitingSignal>()
         segments.filter { it.text.isNotBlank() }.forEach { segment ->
-            val previousText = precedingText(sessionId, segment, session.mode)
+            val previousText = segments.filter { it.sequence in segment.sequence - 2 until segment.sequence }
+                .joinToString(" ") { it.text }
             signalAnalyzer.analyze(segment.text, session.mode, previousText).forEach { signal ->
                 markers += DitingMarkerEntity(
                     sessionId = sessionId,
@@ -324,7 +357,7 @@ class DitingTranscriptionCoordinator @Inject constructor(
                 signals += signal
             }
         }
-        repository.replaceLocalRuleMarkers(sessionId, markers)
+        repository.replaceLocalRuleMarkers(sessionId, markers, segments.associate { it.sequence to it.text })
         return signals
     }
 
@@ -337,9 +370,12 @@ class DitingTranscriptionCoordinator @Inject constructor(
             pendingEvents.remove(sessionId)
             pendingPartials.remove(sessionId)
         }
-        val jobs = synchronized(aiJobs) { aiJobs.remove(sessionId)?.toList().orEmpty() }
-        jobs.forEach { it.cancel() }
-        aiAnnotator?.clear(sessionId)
+        aiPersistenceMutex.withLock {
+            val worker = synchronized(aiWorkers) { aiWorkers.remove(sessionId) }
+            worker?.wake?.close()
+            worker?.job?.cancel()
+            aiAnnotator?.clear(sessionId)
+        }
     }
 
     private companion object {

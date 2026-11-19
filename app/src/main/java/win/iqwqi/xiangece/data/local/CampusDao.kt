@@ -8,6 +8,36 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CampusDao {
+    @Query("SELECT * FROM calendar_notes ORDER BY dateEpochDay")
+    fun observeCalendarNotes(): Flow<List<CalendarNoteEntity>>
+
+    @Query("SELECT * FROM calendar_notes ORDER BY dateEpochDay")
+    suspend fun allCalendarNotes(): List<CalendarNoteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCalendarNotes(values: List<CalendarNoteEntity>)
+
+    @Query("DELETE FROM calendar_notes WHERE dateEpochDay = :day")
+    suspend fun deleteCalendarNote(day: Long)
+
+    @Query("DELETE FROM calendar_notes")
+    suspend fun clearCalendarNotes()
+
+    @Query("SELECT * FROM courses WHERE timetableId = :id")
+    suspend fun coursesInTimetable(id: Long): List<CourseEntity>
+
+    @Query("SELECT * FROM course_meetings WHERE timetableId = :id")
+    suspend fun meetingsInTimetable(id: Long): List<CourseMeetingEntity>
+
+    @Query("DELETE FROM timetables WHERE id = :id")
+    suspend fun deleteTimetable(id: Long)
+
+    @Query("UPDATE inbox_items SET timetableId = :replacement WHERE timetableId = :id")
+    suspend fun moveTimetableInbox(id: Long, replacement: Long)
+
+    @Query("UPDATE diting_sessions SET courseId = NULL, meetingId = NULL WHERE courseId = :courseId OR meetingId IN (SELECT id FROM course_meetings WHERE courseId = :courseId)")
+    suspend fun detachRecordingsFromCourse(courseId: Long)
+
     @Query("SELECT * FROM semesters WHERE isCurrent = 1 LIMIT 1")
     fun observeCurrentSemester(): Flow<SemesterEntity?>
 

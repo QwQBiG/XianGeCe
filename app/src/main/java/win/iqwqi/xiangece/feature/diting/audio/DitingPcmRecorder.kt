@@ -12,6 +12,7 @@ import android.media.audiofx.NoiseSuppressor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancel
@@ -21,6 +22,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class DitingAudioChunk(
     val sequence: Int,
@@ -51,13 +54,15 @@ class DitingPcmRecorder(
     private var chunkWriter: DitingWavFileWriter? = null
     private var loopJob: Job? = null
     private var chunkWorker: Job? = null
-    private val chunkChannel = Channel<DitingAudioChunk>(Channel.UNLIMITED)
+    private val chunkChannel = Channel<Unit>(Channel.CONFLATED)
+    private val speechBoundary = DitingSpeechBoundary()
     @Volatile private var paused = false
     @Volatile private var stopRequested = false
     @Volatile private var failure: Throwable? = null
     @Volatile private var totalBytes = 0L
     private var chunkBytes = 0L
-    private var sequence = 0
+    @Volatile private var sequence = 0
+    private var softwareGain = 1f
     private val writerMutex = Mutex()
 
     @SuppressLint("MissingPermission")
@@ -75,13 +80,24 @@ class DitingPcmRecorder(
         files.segmentsDirectory.mkdirs()
         fullWriter = DitingWavFileWriter(files.recording)
         chunkWorker = scope.launch {
-            for (chunk in chunkChannel) {
-                runCatching { onChunkReady(chunk) }
-                    .onFailure { error ->
-                        // 分段转写或数据库回调失败时，完整录音仍然是可用资产；
-                        // 不把它升级为录音失败，用户可以在结束后重试该分段。
-                        Log.e("DitingPcmRecorder", "Chunk callback failed for ${chunk.sequence}", error)
+            var delivered = 0
+            var deliveredBytes = 0L
+            for (ignored in chunkChannel) {
+                while (delivered < sequence) {
+                    val file = segmentFile(delivered)
+                    val bytes = (file.length() - 44).coerceAtLeast(0)
+                    val chunk = DitingAudioChunk(delivered, file, bytesToMillis(deliveredBytes), bytesToMillis(deliveredBytes + bytes))
+                    try {
+                        onChunkReady(chunk)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        // Sequential WAVs remain recoverable even if the database callback fails.
+                        Log.e("DitingPcmRecorder", "Chunk callback failed for $delivered", error)
                     }
+                    deliveredBytes += bytes
+                    delivered++
+                }
             }
         }
         loopJob = scope.launch {
@@ -167,10 +183,11 @@ class DitingPcmRecorder(
         loopJob?.join()
         writerMutex.withLock { finalizeChunk() }
         chunkChannel.close()
-        chunkWorker?.join()
-        chunkWorker = null
+        // Finalize the full WAV before waiting for metadata/database consumers.
         fullWriter?.close()
         fullWriter = null
+        chunkWorker?.join()
+        chunkWorker = null
         releaseAudioEffects()
         audioRecord?.release()
         audioRecord = null
@@ -253,15 +270,23 @@ class DitingPcmRecorder(
             val count = record.read(buffer, 0, buffer.size)
             if (count > 0) {
                 recoveryAttempts = 0
-                onPcmRead?.invoke(buffer, 0, count)
                 writerMutex.withLock {
-                    fullWriter?.write(buffer, 0, count)
-                    if (chunkWriter == null) chunkWriter = DitingWavFileWriter(segmentFile(sequence))
-                    chunkWriter?.write(buffer, 0, count)
-                    totalBytes += count
-                    chunkBytes += count
-                    if (chunkBytes >= TARGET_CHUNK_BYTES) finalizeChunk()
+                    var offset = 0
+                    while (offset < count) {
+                        // Measure the unboosted PCM; store every sample including quiet intervals.
+                        val part = speechBoundary.consume(buffer, offset, count - offset)
+                        enhanceQuietSpeech(buffer, offset, part)
+                        fullWriter?.write(buffer, offset, part)
+                        if (chunkWriter == null) chunkWriter = DitingWavFileWriter(segmentFile(sequence))
+                        chunkWriter?.write(buffer, offset, part)
+                        totalBytes += part
+                        chunkBytes += part
+                        offset += part
+                        if (speechBoundary.shouldSplit) finalizeChunk()
+                    }
                 }
+                runCatching { onPcmRead?.invoke(buffer, 0, count) }
+                    .onFailure { Log.w("DitingPcmRecorder", "Live recognition callback failed; PCM saved", it) }
             } else if (count < 0) {
                 // pause() stops AudioRecord so that the microphone is actually released.
                 // Some devices also return ERROR_DEAD_OBJECT when an audio route changes;
@@ -285,15 +310,50 @@ class DitingPcmRecorder(
         }
     }
 
+    /**
+     * Some phones report AGC support but still produce very quiet classroom PCM.
+     * Apply a conservative, slowly rising software gain before both saving and ASR.
+     * Silence is not amplified, and loud speech drops back to unity immediately.
+     */
+    private fun enhanceQuietSpeech(buffer: ByteArray, offset: Int, count: Int) {
+        val evenCount = count - count % 2
+        if (evenCount <= 0) return
+        var peak = 0
+        var index = offset
+        while (index < offset + evenCount) {
+            val sample = (((buffer[index + 1].toInt()) shl 8) or (buffer[index].toInt() and 0xff)).toShort().toInt()
+            peak = maxOf(peak, abs(sample))
+            index += 2
+        }
+        val desiredGain = if (peak < MIN_SPEECH_PEAK) {
+            1f
+        } else {
+            (TARGET_SPEECH_PEAK.toFloat() / peak).coerceIn(1f, MAX_SOFTWARE_GAIN)
+        }
+        softwareGain = if (desiredGain < softwareGain) {
+            desiredGain
+        } else {
+            softwareGain + (desiredGain - softwareGain) * GAIN_RISE_FACTOR
+        }
+        if (softwareGain <= 1.01f) return
+        index = offset
+        while (index < offset + evenCount) {
+            val sample = (((buffer[index + 1].toInt()) shl 8) or (buffer[index].toInt() and 0xff)).toShort().toInt()
+            val boosted = (sample * softwareGain).roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            buffer[index] = (boosted and 0xff).toByte()
+            buffer[index + 1] = ((boosted ushr 8) and 0xff).toByte()
+            index += 2
+        }
+    }
+
     private suspend fun finalizeChunk() {
         val writer = chunkWriter ?: return
         writer.close()
-        val start = bytesToMillis(totalBytes - chunkBytes)
-        val end = bytesToMillis(totalBytes)
-        chunkChannel.trySend(DitingAudioChunk(sequence, segmentFile(sequence), start, end))
         sequence += 1
+        chunkChannel.trySend(Unit)
         chunkWriter = null
         chunkBytes = 0
+        speechBoundary.reset()
     }
 
     private fun bytesToMillis(bytes: Long): Long = bytes * 1_000L / BYTES_PER_SECOND
@@ -306,5 +366,9 @@ class DitingPcmRecorder(
         private const val TARGET_CHUNK_BYTES = BYTES_PER_SECOND * 8
         private const val MAX_REOPEN_ATTEMPTS = 3
         private const val REOPEN_DELAY_MILLIS = 150L
+        private const val MIN_SPEECH_PEAK = 700
+        private const val TARGET_SPEECH_PEAK = 18_000
+        private const val MAX_SOFTWARE_GAIN = 2.2f
+        private const val GAIN_RISE_FACTOR = 0.18f
     }
 }

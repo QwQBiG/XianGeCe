@@ -4,11 +4,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +56,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
@@ -68,39 +73,8 @@ fun BrandHeader(
     icon: ImageVector = Icons.Outlined.AutoStories,
     action: (@Composable () -> Unit)? = null,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
-                .border(1.dp, MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimary,
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            subtitle?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        action?.invoke()
+    AppPageHeader(title, subtitle, modifier) {
+        if (action != null) action() else Icon(icon, null, Modifier.size(26.dp), tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -111,7 +85,7 @@ fun SectionTitle(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(title, style = MaterialTheme.typography.titleMedium)
         caption?.let {
             Spacer(Modifier.height(3.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -125,21 +99,19 @@ fun PaperCard(
     elevation: Dp = 0.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val cardShape = RoundedCornerShape(24.dp)
+    val cardShape = MaterialTheme.shapes.large
     Card(
         // Card's shape controls its surface, while an explicit clip also
         // prevents child backgrounds/ripples from painting square corners.
         modifier = modifier.fillMaxWidth().clip(cardShape),
         shape = cardShape,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
-        border = CardDefaults.outlinedCardBorder(enabled = true).copy(
-            brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)),
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = null,
         elevation = CardDefaults.cardElevation(defaultElevation = elevation),
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             content = content,
         )
     }
@@ -165,6 +137,7 @@ fun EmptyStateCard(
     icon: ImageVector = Icons.Outlined.Inbox,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    companion: Boolean = false,
 ) {
     PaperCard(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -172,7 +145,11 @@ fun EmptyStateCard(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
+            if (companion && win.iqwqi.xiangece.ui.theme.LocalCompanionAppearance.current.showsFeedback) {
+                win.iqwqi.xiangece.ui.companion.CompanionSticker(
+                    win.iqwqi.xiangece.ui.companion.CompanionCue.HELLO, Modifier.size(64.dp),
+                )
+            } else Box(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(14.dp))
@@ -270,10 +247,10 @@ fun AppTextField(
         visualTransformation = visualTransformation,
         trailingIcon = trailingIcon,
         supportingText = if (supportingText != null) { { Text(supportingText) } } else null,
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
             focusedLabelColor = MaterialTheme.colorScheme.primary,
         ),
     )
@@ -361,13 +338,35 @@ fun AppFormSheet(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 content = content,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
-                Button(
-                    onClick = onConfirm,
-                    enabled = confirmEnabled,
-                    modifier = Modifier.weight(1f),
-                ) { Text(confirmLabel) }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val density = LocalDensity.current
+                val measurer = rememberTextMeasurer()
+                val labelStyle = MaterialTheme.typography.labelLarge
+                val widestLabel = maxOf(
+                    measurer.measure(AnnotatedString(confirmLabel), labelStyle, softWrap = false).size.width,
+                    measurer.measure(AnnotatedString("取消"), labelStyle, softWrap = false).size.width,
+                )
+                val stackActions = with(density) { widestLabel + 50.dp.toPx() > ((maxWidth - 10.dp) / 2).toPx() }
+                val buttonPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)
+                val confirmButton: @Composable (Modifier) -> Unit = { buttonModifier ->
+                    Button(onClick = onConfirm, enabled = confirmEnabled,
+                        modifier = buttonModifier.heightIn(min = 48.dp), contentPadding = buttonPadding) { Text(confirmLabel) }
+                }
+                val cancelButton: @Composable (Modifier) -> Unit = { buttonModifier ->
+                    OutlinedButton(onClick = onDismiss, modifier = buttonModifier.heightIn(min = 48.dp),
+                        contentPadding = buttonPadding) { Text("取消") }
+                }
+                if (stackActions) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        confirmButton(Modifier.fillMaxWidth())
+                        cancelButton(Modifier.fillMaxWidth())
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        cancelButton(Modifier.weight(1f))
+                        confirmButton(Modifier.weight(1f))
+                    }
+                }
             }
         }
     }

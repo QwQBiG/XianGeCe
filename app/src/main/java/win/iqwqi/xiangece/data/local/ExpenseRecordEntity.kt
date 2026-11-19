@@ -3,8 +3,10 @@ package win.iqwqi.xiangece.data.local
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /** 记账记录。type: 0=支出, 1=收入。 */
+@Serializable
 @Entity(
     tableName = "expense_records",
     indices = [Index(value = ["occurredAtEpochMillis"], name = "index_expense_records_occurredAtEpochMillis")],
